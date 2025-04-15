@@ -1,9 +1,19 @@
 import chromadb
 from chromadb.config import Settings
 import json
+from sentence_transformers import SentenceTransformer
+import torch
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"Using device: {device}")
 
+
+embedding_function = SentenceTransformerEmbeddingFunction(
+    model_name="all-MiniLM-L6-v2",
+    device="cuda"  # This ensures embeddings are computed on the GPU
+)
 def initialize_chroma_db():
-    return chromadb.PersistentClient(path="/data/vmm5481/nl_to_trapi_db") # adjust the path accordingly
+    return chromadb.PersistentClient(path="/scratch/vmm5481/NL2TRAPI/nl_to_trapi_db") # adjust the path accordingly
 
 def add_to_collection_if_not_exists(collection, documents, metadatas, ids):
     existing_data = collection.get(ids=ids)
@@ -22,30 +32,30 @@ def add_to_collection_if_not_exists(collection, documents, metadatas, ids):
         print(f"Skipping duplicate IDs: {existing_ids.intersection(new_ids)}")
 
 def populate_nl_to_trapi_examples(chroma_client, collection_name):
-    collection = chroma_client.get_or_create_collection(name=collection_name)
+    collection = chroma_client.get_or_create_collection(name=collection_name, embedding_function=embedding_function)
     
     nl_to_trapi_examples = [
-        # Example 1
-        {
-            "nl_query": "What proteins does acetaminophen interact with?",
-            "trapi_query": {
-                "edges": {
-                    "qg2": {
-                        "subject": "qg1", 
-                        "object": "qg0", 
-                        "predicates": ["biolink:physically_interacts_with"]
-                    }
-                },
-                "nodes": {
-                    "qg0": {
-                        "name": "acetaminophen",
-                        "ids": ["CHEMBL.COMPOUND:CHEMBL112"],
-                        "categories": ["biolink:ChemicalEntity"]
-                    },
-                    "qg1": {"categories": ["biolink:Protein"]}
-                }
-            }
-        },
+        # # Example 1
+        # {
+        #     "nl_query": "What proteins does acetaminophen interact with?",
+        #     "trapi_query": {
+        #         "edges": {
+        #             "qg2": {
+        #                 "subject": "qg1", 
+        #                 "object": "qg0", 
+        #                 "predicates": ["biolink:physically_interacts_with"]
+        #             }
+        #         },
+        #         "nodes": {
+        #             "qg0": {
+        #                 "name": "acetaminophen",
+        #                 "ids": ["CHEMBL.COMPOUND:CHEMBL112"],
+        #                 "categories": ["biolink:ChemicalEntity"]
+        #             },
+        #             "qg1": {"categories": ["biolink:Protein"]}
+        #         }
+        #     }
+        # },
         
         # Example 2
         {
@@ -75,8 +85,8 @@ def populate_nl_to_trapi_examples(chroma_client, collection_name):
             "nl_query": "What chemicals treat bipolar disorder, and are not contraindicated for it",
             "trapi_query": {
                 "edges": {
-                    "e00": {"exclude": False, "object": "n01", "predicates": ["biolink:treats"], "subject": "n00"},
-                    "e01": {"exclude": True, "object": "n01", "predicates": ["biolink:contraindicated_for"], "subject": "n00"},
+                    "e00": {"object": "n01", "predicates": ["biolink:treats"], "subject": "n00"},
+                    "e01": {"object": "n01", "predicates": ["biolink:contraindicated_for"], "subject": "n00"},
                     "subclass:n00--n00": {"object": "n00", "predicates": ["biolink:subclass_of"], "subject": "n00"}
                 },
                 "nodes": {
@@ -103,16 +113,16 @@ def populate_nl_to_trapi_examples(chroma_client, collection_name):
         },
 
         # Example 5
-        # {
-        #     "nl_query": "What biological processes are related to GFAP",
-        #     "trapi_query": {
-        #         "edges": {"e00": {"subject": "n00", "object": "n01"}},
-        #         "nodes": {
-        #             "n00": {"categories": ["biolink:Protein"], "ids": ["UniProtKB:P14136"]},
-        #             "n01": {"categories": ["biolink:BiologicalProcess"]}
-        #         }
-        #     }
-        # },
+        {
+            "nl_query": "What biological processes are related to GFAP",
+            "trapi_query": {
+                "edges": {"e00": {"subject": "n00", "object": "n01"}},
+                "nodes": {
+                    "n00": {"categories": ["biolink:Protein"], "ids": ["UniProtKB:P14136"]},
+                    "n01": {"categories": ["biolink:BiologicalProcess"]}
+                }
+            }
+        },
 
         # Example 6
         {
