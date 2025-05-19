@@ -1,166 +1,197 @@
-
-import chromadb
-from sentence_transformers import SentenceTransformer
+# below code is for updated node along with 2-3 words not resolved + not considered goes for the schema mapping
+import re
 import json
-from transformers import pipeline
 import torch
+import logging
+from datetime import datetime
+import chromadb
+from transformers import pipeline
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
-# Add this to your query script
+# Setup Logging
+log_filename = f"nl2trapi_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+logging.basicConfig(
+    filename=log_filename,
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logging.info("Script started.")
+
+# Constants
+STOPWORDS = {
+    "what", "which", "is", "are", "a", "an", "the", "in", "of", "to", "for", "and", "on", "with", "by", "how", "at", "that"
+}
+EXCLUDED_CATEGORIES = {
+    "biolink:ClinicalAttribute", "biolink:InformationContentEntity", "biolink:Event",
+    "biolink:ExposureEvent", "biolink:GeographicLocation", "biolink:PopulationOfIndividualOrganisms",
+    "biolink:Publication", "biolink:RetrievalSource", "biolink:StudyPopulation", "biolink:SubjectOfInvestigation"
+}
+
 embedding_function = SentenceTransformerEmbeddingFunction(
-    model_name="all-MiniLM-L6-v2",
-    device="cuda"  # Ensure GPU usage
+    model_name="pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb",
+    device="cuda"
 )
 
-# Initialize SentenceTransformer model for embeddings
+def initialize_chroma_db(path):
+    logging.info(f"Initializing ChromaDB from {path}")
+    return chromadb.PersistentClient(path=path)
 
-# embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+def search_chroma(chroma_client, collection_name, query, top_k=5):
+    try:
+        logging.info(f"Searching collection '{collection_name}' for: {query}")
+        collection = chroma_client.get_collection(name=collection_name, embedding_function=embedding_function)
+        return collection.query(query_texts=[query], n_results=top_k)
+    except Exception as e:
+        logging.error(f"Search error in '{collection_name}': {e}")
+        return None
 
-# Initialize Chroma DB Instances
-def initialize_chroma_db(persist_dir):
-    return chromadb.PersistentClient(path=persist_dir)
+def exact_node_match(chroma_client, nl_query):
+    try:
+        collection = chroma_client.get_collection(name="nodes_info", embedding_function=embedding_function)
+        results = collection.get(where={"name": nl_query})
+        if results and results.get("metadatas") and results["metadatas"][0]:
+            logging.info(f"Exact match found for node: {nl_query}")
+            return [{
+                "documents": [[results["documents"][0]]],
+                "metadatas": [[results["metadatas"][0]]]
+            }]
+    except Exception as e:
+        logging.warning(f"Exact match failed for node '{nl_query}': {e}")
+    return []
 
-# Perform Semantic Search on Chroma DB
-def search_chroma(chroma_client, collection_name, query, top_k=3):
-    for attempt in range(3):
-        try:
-            collection = chroma_client.get_collection(name=collection_name, embedding_function=embedding_function)
-            results = collection.query(query_texts=[query], n_results=top_k)
-            print(f"Search results: {results}")
-            return results
-        except Exception as e:
-            print(f"Attempt {attempt + 1} failed: {e}")
-    return None
+def extract_keywords(nl_query):
+    tokens = re.findall(r"\b\w+\b", nl_query.lower())
+    keywords = [t for t in tokens if t not in STOPWORDS]
+    logging.info(f"Extracted keywords: {keywords}")
+    return keywords
 
-# Construct Prompt Dynamically
-def construct_prompt(nl_query, retrieved_examples, retrieved_schema):
-    # Format retrieved examples
-    example_text = ""
-    if retrieved_examples and 'documents' in retrieved_examples and retrieved_examples['documents']:
-        for i in range(len(retrieved_examples['documents'])):
-            example_text += f"Example {i + 1}:\n"
-            example_text += f"NL Query: {retrieved_examples['documents'][i]}\n"
-            # Accessing the correct index of the 'metadatas' list, which is nested in another list
-            trapi_query = retrieved_examples['metadatas'][i][0].get('trapi_query', 'No TRAPI query available')
-            example_text += f"TRAPI Query: {trapi_query}\n\n"
-
-    # Format retrieved schema
-    schema_text = ""
-    if retrieved_schema and 'documents' in retrieved_schema and retrieved_schema['documents']:
-        for i in range(len(retrieved_schema['documents'])):
-            # Accessing the first element of the list in 'metadatas' to retrieve the schema 'key'
-            schema_key = retrieved_schema['metadatas'][i][0].get('key', 'No key available')
-            schema_text += f"- {schema_key}: {retrieved_schema['documents'][i]}\n"
-
-    # Construct prompt
-    prompt = f"""
-    You are an expert at converting natural language queries into TRAPI JSON format and Generate only the TRAPI JSON output.
-
-    Here is an example of how similar queries were converted into TRAPI queries:
-
-    {example_text}
-
-    Here is some relevant schema information for your reference, Ensure all node categories and edge predicates are valid:
-    {schema_text}
-
-    Now, generate a TRAPI JSON for this natural language query:
-    {nl_query}
-
-    TRAPI JSON:
-    """
-
+def construct_prompt(nl_query, examples, schema, resolved_nodes):
+    prompt = "You are an expert at converting natural language queries into TRAPI JSON format.\n\n"
+    if examples:
+        for i in range(len(examples["documents"][0])):
+            nl = examples["documents"][0][i]
+            trapi = examples["metadatas"][0][i].get("trapi_query", "N/A")
+            prompt += f"Example {i+1}:\nNL Query: {nl}\nTRAPI Query: {trapi}\n\n"
+    if schema and schema["documents"][0]:
+        prompt += "Schema Knowledge:\n"
+        for i in range(len(schema["documents"][0])):
+            k = schema["metadatas"][0][i].get("key", "Unknown")
+            d = schema["documents"][0][i]
+            prompt += f"- {k}: {d}\n"
+    if resolved_nodes:
+        prompt += "\nNode Context:\n"
+        for result in resolved_nodes:
+            meta = result["metadatas"][0][0]
+            name = meta.get("name", "")
+            node_id = meta.get("id", "")
+            cat = meta.get("category", "")
+            desc = result["documents"][0][0]
+            prompt += f"{name} | {node_id} | {cat}: {desc}\n"
+    prompt += f"\nNow, generate a TRAPI JSON for this natural language query:\n{nl_query}\n\nTRAPI JSON:"
+    logging.info("Prompt constructed successfully.")
     return prompt
 
-
-
-
-# Initialize Mistral Model
 def initialize_mistral():
-    print("Initializing Mistral Model...")
-    generator = pipeline('text-generation', model='mistralai/Mistral-7B-Instruct-v0.1', torch_dtype=torch.float16, device_map="cuda:0")
-    print("Mistral Model Initialized.")
-    return generator
-
-# Generate TRAPI Query Using Retrieved Data and LLM (Mistral)
-def generate_trapi(nl_query, retrieved_examples, retrieved_schema, generator):
-    prompt = construct_prompt(nl_query, retrieved_examples, retrieved_schema)
-    
-    sequences = generator(
-        prompt,
-        do_sample=True,
-        top_k=10,
-        num_return_sequences=1,
-        top_p=0.9,
-        temperature=0.7,
-        eos_token_id=generator.tokenizer.eos_token_id,
-        max_length=1024,
+    logging.info("Loading Mistral model...")
+    return pipeline(
+        "text-generation",
+        model="mistralai/Mistral-7B-Instruct-v0.1",
+        torch_dtype=torch.float16,
+        device_map="cuda:0"
     )
-    
-    llm_response = sequences[0]['generated_text']
-    print(f"LLM Response: {llm_response}")
-    
-    trapi_query = extract_trapi_query(llm_response)
-    return trapi_query
 
-# Extract TRAPI Query from LLM Response
 def extract_trapi_query(llm_response):
     try:
         lines = llm_response.splitlines()
-        start_index = None
-        for i, line in enumerate(lines):
-            if line.strip() == "TRAPI JSON:":
-                start_index = i + 1
-                break
-
-        if start_index is not None:
-            trapi_query_str = "\n".join(lines[start_index:])
-            try:
-                trapi_query = json.loads(trapi_query_str)
-                return trapi_query
-            except json.JSONDecodeError as e:
-                print(f"Error parsing JSON: {e}")
-                return None
-        else:
-            print("TRAPI JSON not found in response.")
-            return None
+        start = next((i for i, l in enumerate(lines) if "TRAPI JSON" in l), None)
+        if start is not None:
+            json_block = "\n".join(lines[start+1:]).strip("` \n")
+            return json.loads(json_block)
     except Exception as e:
-        print(f"Error extracting TRAPI query: {e}")
-        return None
+        logging.error(f"Failed to parse TRAPI JSON: {e}")
+    return None
 
-# Main Function to Run the Pipeline
+def generate_trapi(nl_query, examples, schema, nodes, mistral):
+    prompt = construct_prompt(nl_query, examples, schema, nodes)
+    logging.info("Sending prompt to Mistral LLM...")
+    response = mistral(
+        prompt,
+        do_sample=True,
+        top_k=10,
+        top_p=0.9,
+        temperature=0.7,
+        max_new_tokens=256,
+        num_return_sequences=1,
+        eos_token_id=mistral.tokenizer.eos_token_id
+    )[0]["generated_text"]
+    logging.info("Received response from LLM.")
+    print("=== LLM Output ===\n", response)
+    return extract_trapi_query(response)
+
 def main():
-    # Initialize Chroma DB clients for DB1 and DB2
-    nl_to_trapi_db = initialize_chroma_db("/scratch/vmm5481/NL2TRAPI/nl_to_trapi_db") # set it to chromadb path with nl2trapi examples
-    yaml_schema_db = initialize_chroma_db("/scratch/vmm5481/NL2TRAPI/chroma_db") # set it to chromadb path with schema information
+    nl_query = "What proteins does acetaminophen interact with?"
+    logging.info(f"Processing query: {nl_query}")
 
-    # Initialize Mistral model
-    generator = initialize_mistral()
+    db_examples = initialize_chroma_db("/scratch/vmm5481/NL2TRAPI/nl_to_trapi_db")
+    db_nodeschema = initialize_chroma_db("/scratch/vmm5481/NL2TRAPI/chroma_db")
 
-    # Input Natural Language Query
-    nl_query = "What proteins does acetaminophen interact with" # we can try out with any relevant NL query here
+    examples = search_chroma(db_examples, "nl_to_trapi", nl_query, top_k=5)
+    resolved_nodes = exact_node_match(db_nodeschema, nl_query)
+    keywords = extract_keywords(nl_query)
 
-    # Retrieve relevant NL-to-TRAPI examples from DB1
-    retrieved_examples = search_chroma(nl_to_trapi_db, collection_name="nl_to_trapi", query=nl_query, top_k=10)
+    node_collection = db_nodeschema.get_collection(name="nodes_info", embedding_function=embedding_function)
+    resolved_node_terms = set()
+    if resolved_nodes:
+        for result in resolved_nodes:
+            meta = result["metadatas"][0][0]
+            resolved_node_terms.add(meta.get("name", "").lower())
 
-    # Retrieve relevant schema information from DB2
-    retrieved_schema = search_chroma(yaml_schema_db, collection_name="yaml_schema", query=nl_query,top_k=10)
+    for kw in keywords:
+        if kw in resolved_node_terms:
+            continue
+        try:
+            results = node_collection.get(where={"name": kw})
+            if results and results.get("metadatas") and results["metadatas"][0]:
+                category = results["metadatas"][0].get("category", "")
+                if category not in EXCLUDED_CATEGORIES:
+                    resolved_nodes.append({
+                        "documents": [[results["documents"][0]]],
+                        "metadatas": [[results["metadatas"][0]]]
+                    })
+                    resolved_node_terms.add(kw)
+                    logging.info(f"Resolved node term: {kw}")
+        except Exception:
+            logging.warning(f"Failed to resolve node term: {kw}")
+            continue
 
-    # Check if results are empty
-    if not retrieved_examples or not retrieved_schema:
-        print("No relevant data found. Exiting.")
-        return
+    # Fallback to schema
+    unresolved_terms = [kw for kw in keywords if kw not in resolved_node_terms]
+    schema = {"documents": [[]], "metadatas": [[]]}
+    if unresolved_terms:
+        logging.info(f"Falling back to schema resolution for: {unresolved_terms}")
+        schema_collection = db_nodeschema.get_collection(name="yaml_schema", embedding_function=embedding_function)
+        for term in unresolved_terms:
+            try:
+                result = schema_collection.query(query_texts=[term], n_results=2)
+                if result and result["documents"][0]:
+                    schema["documents"][0].extend(result["documents"][0])
+                    schema["metadatas"][0].extend(result["metadatas"][0])
+                    logging.info(f"Schema term resolved: {term}")
+            except Exception:
+                logging.warning(f"Schema resolution failed for: {term}")
+                continue
 
-    # Generate TRAPI Query using LLM (Mistral)
-    trapi_query = generate_trapi(nl_query, retrieved_examples, retrieved_schema, generator)
+    mistral = initialize_mistral()
+    trapi_query = generate_trapi(nl_query, examples, schema, resolved_nodes, mistral)
 
-    # Print the generated TRAPI query
     if trapi_query:
+        print("\n✅ Final TRAPI Query:")
         print(json.dumps(trapi_query, indent=4))
+        logging.info("TRAPI query successfully generated.")
     else:
-        print("Failed to generate a valid TRAPI query.")
+        print("\n❌ Failed to generate a valid TRAPI query.")
+        logging.error("TRAPI generation failed.")
 
 if __name__ == "__main__":
     main()
-
-
-
