@@ -1,4 +1,4 @@
-# query_generation_refactored.py — with NodeResolver, clean timing, and optimized resolution
+# query_generation_refactored.py — FINAL with mixed node/schema resolution and category filtering
 
 import chromadb
 import json
@@ -38,7 +38,13 @@ embedding_function = SentenceTransformerEmbeddingFunction(
     device="cuda"
 )
 
-# ========== Chroma Init ==========
+# Categories to exclude from node context
+EXCLUDED_CATEGORIES = {
+    "biolink:ClinicalAttribute", "biolink:InformationContentEntity", "biolink:Event",
+    "biolink:ExposureEvent", "biolink:GeographicLocation", "biolink:PopulationOfIndividualOrganisms",
+    "biolink:Publication", "biolink:RetrievalSource", "biolink:StudyPopulation", "biolink:SubjectOfInvestigation"
+}
+
 @timed
 def initialize_chroma_db(path):
     return chromadb.PersistentClient(path=path)
@@ -52,20 +58,42 @@ def search_chroma(chroma_client, collection_name, query, top_k=5):
         logger.error(f"Search error in '{collection_name}': {e}")
         return None
 
+# ========== New Mixed Entity Resolver ==========
+def resolve_mixed_entities(query: str, resolver: NodeResolver, chroma_client, schema_top_k=3):
+    keywords = re.findall(r"\b\w+\b", query.lower())
+    resolved_nodes = []
+    schema_matches = []
+    
+    for token in keywords:
+        node_result = resolver.resolve(token)
+        if node_result:
+            for node in node_result:
+                if node.get("category") not in EXCLUDED_CATEGORIES:
+                    resolved_nodes.append(node)
+                else:
+                    logger.info(f"Excluded category match: {node.get('category')} for term '{token}'")
+        else:
+            schema_result = search_chroma(chroma_client, "yaml_schema", token, top_k=schema_top_k)
+            if schema_result and schema_result.get("documents"):
+                schema_matches.append(schema_result)
+
+    return resolved_nodes, schema_matches
+
 # ========== Prompt ==========
-def construct_prompt(nl_query, examples, schema, resolved_nodes):
+def construct_prompt(nl_query, examples, schema_chunks, resolved_nodes):
     prompt = "You are an expert at converting natural language queries into TRAPI JSON format.\n\n"
     if examples:
         for i in range(len(examples["documents"][0])):
             nl = examples["documents"][0][i]
             trapi = examples["metadatas"][0][i].get("trapi_query", "N/A")
             prompt += f"Example {i+1}:\nNL Query: {nl}\nTRAPI Query: {trapi}\n\n"
-    if schema:
+    if schema_chunks:
         prompt += "Schema Knowledge:\n"
-        for i in range(len(schema["documents"][0])):
-            k = schema["metadatas"][0][i].get("key", "Unknown")
-            d = schema["documents"][0][i]
-            prompt += f"- {k}: {d}\n"
+        for schema in schema_chunks:
+            for i in range(len(schema["documents"][0])):
+                k = schema["metadatas"][0][i].get("key", "Unknown")
+                d = schema["documents"][0][i]
+                prompt += f"- {k}: {d}\n"
     if resolved_nodes:
         prompt += "\nNode Context:\n"
         for node in resolved_nodes:
@@ -75,7 +103,7 @@ def construct_prompt(nl_query, examples, schema, resolved_nodes):
             desc = node.get("description", "")
             prompt += f"{name} | {node_id} | {cat}: {desc}\n"
     prompt += f"\nNow, generate a TRAPI JSON for this natural language query:\n{nl_query}\n\nTRAPI JSON:"
-    logger.info("Prompt Preview:\n" + prompt[:1000] + ("... [truncated]" if len(prompt) > 1000 else ""))
+    logger.info("Full Prompt:\n" + prompt)
     return prompt
 
 # ========== LLM + TRAPI ==========
@@ -101,8 +129,8 @@ def extract_trapi_query(llm_response):
     return None
 
 @timed
-def generate_trapi(nl_query, examples, schema, resolved_nodes, mistral):
-    prompt = construct_prompt(nl_query, examples, schema, resolved_nodes)
+def generate_trapi(nl_query, examples, schema_chunks, resolved_nodes, mistral):
+    prompt = construct_prompt(nl_query, examples, schema_chunks, resolved_nodes)
     response = mistral(
         prompt,
         do_sample=True,
@@ -113,7 +141,7 @@ def generate_trapi(nl_query, examples, schema, resolved_nodes, mistral):
         num_return_sequences=1,
         eos_token_id=mistral.tokenizer.eos_token_id
     )[0]["generated_text"]
-    logger.info("Raw LLM Response:\n" + response[:1000] + ("... [truncated]" if len(response) > 1000 else ""))
+    logger.info("Raw LLM Response:\n" + response)
     return extract_trapi_query(response)
 
 # ========== Main ==========
@@ -127,15 +155,11 @@ def main():
     examples = search_chroma(db_examples, "nl_to_trapi", nl_query, top_k=5)
 
     resolver = NodeResolver(db_nodeschema, index_path="/scratch/vmm5481/NL2TRAPI/exact_index.pkl")
-    resolved_nodes = resolver.resolve(nl_query)
-    logger.info(f"Resolved {len(resolved_nodes)} nodes")
-
-    schema = None
-    if not resolved_nodes:
-        schema = search_chroma(db_nodeschema, "yaml_schema", nl_query, top_k=6)
+    resolved_nodes, schema_chunks = resolve_mixed_entities(nl_query, resolver, db_nodeschema)
+    logger.info(f"Resolved {len(resolved_nodes)} nodes and {len(schema_chunks)} schema entries")
 
     mistral = initialize_mistral()
-    trapi_query = generate_trapi(nl_query, examples, schema, resolved_nodes, mistral)
+    trapi_query = generate_trapi(nl_query, examples, schema_chunks, resolved_nodes, mistral)
 
     if trapi_query:
         logger.info("\n✅ Final TRAPI Query:")
