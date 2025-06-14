@@ -97,7 +97,7 @@ def construct_prompt(nl_query, examples, schema_matches, resolved_nodes):
             name = node.get("name", "?")
             node_id = node.get("id", "?")
             category = node.get("category", "?")
-            desc = node.get("description", "").strip()[:150]
+            desc = re.sub(r'\s+', ' ', node.get("description", "").strip())[:150]
             prompt += f"- {name}: ID={node_id}, Category={category}, Desc={desc}\n"
 
     if schema_matches:
@@ -106,8 +106,10 @@ def construct_prompt(nl_query, examples, schema_matches, resolved_nodes):
             query_term = schema["query_term"]
             for i in range(len(schema["documents"][0])):
                 key = schema["metadatas"][0][i].get("key", "?")
-                desc = schema["metadatas"][0][i].get("description", "")[:150]
-                prompt += f"- {query_term} → {key}: {desc}\n"
+                desc = re.sub(r'\s+', ' ', schema["metadatas"][0][i].get("description", "").strip())[:150]
+                schema_type = schema["metadatas"][0][i].get("category", "")
+                label = "[category]" if schema_type == "class" else "[predicate]" if schema_type == "predicate" else ""
+                prompt += f"- {query_term} → {key} {label}: {desc}\n"
 
     if examples:
         prompt += "\n--- EXAMPLES ---\n"
@@ -134,13 +136,37 @@ def initialize_mistral():
     )
 
 def extract_trapi_query(text):
-    try:
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if match:
-            return json.loads(match.group(0))
-    except Exception as e:
-        logger.error(f"TRAPI parsing failed: {e}")
+    """
+    Extract the last JSON block from the LLM output that looks like a TRAPI query_graph.
+    This avoids regex recursion and handles malformed or extra blocks.
+    """
+    potential_jsons = []
+    brace_stack = []
+    start_idx = None
+
+    for i, char in enumerate(text):
+        if char == '{':
+            if not brace_stack:
+                start_idx = i
+            brace_stack.append('{')
+        elif char == '}':
+            if brace_stack:
+                brace_stack.pop()
+                if not brace_stack and start_idx is not None:
+                    candidate = text[start_idx:i+1]
+                    potential_jsons.append(candidate)
+                    start_idx = None
+
+    for candidate in reversed(potential_jsons):  # Try most recent JSON blocks first
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+
+    logger.error("TRAPI parsing failed: No valid JSON found in output.")
     return None
+
+
 
 @timed
 def generate_trapi(nl_query, examples, schema_matches, resolved_nodes, mistral):
@@ -179,3 +205,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
