@@ -30,6 +30,10 @@ EXCLUDED_CATEGORIES = {
     "biolink:Publication", "biolink:RetrievalSource", "biolink:StudyPopulation", "biolink:SubjectOfInvestigation"
 }
 
+BLOCKLISTED_NODE_IDS = {
+    "CHV:0000018040", "NCIT:C28226" # related — wrong match
+}
+
 embedding_function = SentenceTransformerEmbeddingFunction(
     model_name="pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb",
     device="cuda"
@@ -50,7 +54,7 @@ def initialize_chroma_db(path):
     return chromadb.PersistentClient(path=path)
 
 @timed
-def search_chroma(chroma_client, collection_name, query, top_k=1):
+def search_chroma(chroma_client, collection_name, query, top_k=3):
     try:
         collection = chroma_client.get_collection(name=collection_name, embedding_function=embedding_function)
         return collection.query(query_texts=[query], n_results=top_k)
@@ -59,7 +63,7 @@ def search_chroma(chroma_client, collection_name, query, top_k=1):
         return None
 
 @timed
-def resolve_entities_and_schema_terms(query, resolver, chroma_client, schema_top_k=1):
+def resolve_entities_and_schema_terms(query, resolver, chroma_client, schema_top_k=3):
     tokens = query.lower().split()
     resolved_nodes = []
     schema_matches = []
@@ -68,19 +72,23 @@ def resolve_entities_and_schema_terms(query, resolver, chroma_client, schema_top
     for token in tokens:
         if token in STOPWORDS or token in matched_tokens:
             continue
+
         node = resolver.exact_match(token)
-        if node:
-            category = node.get("category", "")
-            if category not in EXCLUDED_CATEGORIES:
-                resolved_nodes.append(node)
-                matched_tokens.add(token)
+        node_id = node.get("id", "") if node else None
+        category = node.get("category", "") if node else None
+
+        if node and node_id not in BLOCKLISTED_NODE_IDS and category not in EXCLUDED_CATEGORIES:
+            resolved_nodes.append(node)
+            matched_tokens.add(token)
         else:
             schema = search_chroma(chroma_client, "yaml_schema", token, top_k=schema_top_k)
             if schema and schema.get("documents") and schema["documents"][0]:
                 schema["query_term"] = token
                 schema_matches.append(schema)
                 matched_tokens.add(token)
+
     return resolved_nodes, schema_matches
+
 
 def construct_prompt(nl_query, examples, schema_matches, resolved_nodes):
     prompt = """You are an expert at converting natural language queries into TRAPI JSON format.
@@ -130,16 +138,12 @@ def construct_prompt(nl_query, examples, schema_matches, resolved_nodes):
 def initialize_mistral():
     return pipeline(
         "text-generation",
-        model="mistralai/Mistral-7B-Instruct-v0.1",
+        model="BioMistral/BioMistral-7B",
         torch_dtype=torch.float16,
         device_map="auto"
     )
 
 def extract_trapi_query(text):
-    """
-    Extract the last JSON block from the LLM output that looks like a TRAPI query_graph.
-    This avoids regex recursion and handles malformed or extra blocks.
-    """
     potential_jsons = []
     brace_stack = []
     start_idx = None
@@ -157,7 +161,7 @@ def extract_trapi_query(text):
                     potential_jsons.append(candidate)
                     start_idx = None
 
-    for candidate in reversed(potential_jsons):  # Try most recent JSON blocks first
+    for candidate in reversed(potential_jsons):
         try:
             return json.loads(candidate)
         except json.JSONDecodeError:
@@ -165,8 +169,6 @@ def extract_trapi_query(text):
 
     logger.error("TRAPI parsing failed: No valid JSON found in output.")
     return None
-
-
 
 @timed
 def generate_trapi(nl_query, examples, schema_matches, resolved_nodes, mistral):
