@@ -1,0 +1,29 @@
+# Core pipeline
+langgraph==0.2.4
+chromadb==0.4.24
+sentence-transformers==2.7.0
+transformers==4.41.0
+torch>=2.2.0,<3.0.0
+accelerate>=0.24.0
+huggingface_hub>=0.17.3
+
+# Data modelling & validation
+pydantic==2.7.1
+pyyaml==6.0.1
+
+# Text processing & NER
+spacy==3.7.0
+scispacy==0.5.5
+#   After installing scispacy, run:
+#   pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.5/en_ner_bionlp13cg_md-0.5.5.tar.gz
+
+# Utilities
+rapidfuzz==3.9.0
+tqdm==4.66.4
+requests>=2.32.4
+
+# Embedding infra
+# (chroma pulls SentenceTransformerEmbeddingFunction from sentence-transformers)
+
+# Testing
+pytest==8.2.0

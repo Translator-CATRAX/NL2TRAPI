@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "nl2trapi-langgraph"
+version = "0.1.0"
+description = "LangGraph agent that converts biomedical NL questions to TRAPI query_graph"
+authors = ["Translator CATRAX"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
+langgraph          = "^0.2.4"
+langchain          = "^0.1.17"
+chromadb           = "^0.4.24"
+sentence-transformers = "^2.7.0"
+transformers       = "^4.41.0"
+torch              = ">=2.2.0"
+pydantic           = "^2.7.1"
+rapidfuzz          = "^3.9.0"
+tqdm               = "^4.66.4"
+pyyaml             = "^6.0.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest  = "^8.2.0"

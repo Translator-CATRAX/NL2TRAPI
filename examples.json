@@ -1,0 +1,268 @@
+[
+  {
+    "nl_query": "What drugs are both indicated and contraindicated for bipolar disorder?",
+    "trapi_query": {
+      "edges": {
+        "e00": {
+          "subject": "n00",
+          "object": "n01",
+          "predicates": ["biolink:treats_or_applied_or_studied_to_treat"]
+        },
+        "e01": {
+          "subject": "n00",
+          "object": "n01",
+          "predicates": ["biolink:contraindicated_in"]
+        }
+      },
+      "nodes": {
+        "n00": { "ids": ["MONDO:0004985"] },
+        "n01": { "categories": ["biolink:ChemicalEntity"] }
+      }
+    }
+  },
+  {
+    "nl_query": "What chemicals treat bipolar disorder, and are not contraindicated for it",
+    "trapi_query": {
+      "edges": {
+        "e00": {
+          "subject": "n00",
+          "object": "n01",
+          "predicates": ["biolink:treats"]
+        },
+        "e01": {
+          "subject": "n00",
+          "object": "n01",
+          "predicates": ["biolink:contraindicated_for"]
+        },
+        "subclass:n00--n00": {
+          "subject": "n00",
+          "object": "n00",
+          "predicates": ["biolink:subclass_of"]
+        }
+      },
+      "nodes": {
+        "n00": { "ids": ["MONDO:0004985"] },
+        "n01": { "categories": ["biolink:ChemicalEntity"] }
+      }
+    }
+  },
+  {
+    "nl_query": "What are chemicals that interact with genes that are connected to gonorrhea?",
+    "trapi_query": {
+      "edges": {
+        "e0": { "subject": "n0", "object": "n1" },
+        "e1": {
+          "subject": "n1",
+          "object": "n2",
+          "predicates": ["biolink:physically_interacts_with"]
+        }
+      },
+      "nodes": {
+        "n0": {
+          "ids": ["MONDO:0004277"],
+          "categories": ["biolink:Disease"],
+          "name": "gonorrhea"
+        },
+        "n1": { "categories": ["biolink:Protein"] },
+        "n2": { "categories": ["biolink:ChemicalEntity"] }
+      }
+    }
+  },
+  {
+    "nl_query": "What biological processes are related to GFAP",
+    "trapi_query": {
+      "edges": {
+        "e00": { "subject": "n00", "object": "n01" }
+      },
+      "nodes": {
+        "n00": {
+          "categories": ["biolink:Protein"],
+          "ids": ["NCBIGene:2670"]
+        },
+        "n01": { "categories": ["biolink:BiologicalProcess"] }
+      }
+    }
+  },
+  {
+    "nl_query": "What genes are related to myopia and what are chemicals that are related to those genes",
+    "trapi_query": {
+      "edges": {
+        "e0": { "subject": "n0", "object": "n1" },
+        "e1": { "subject": "n1", "object": "n2" }
+      },
+      "nodes": {
+        "n0": { "ids": ["MONDO:0001384"] },
+        "n1": { "categories": ["biolink:Gene"] },
+        "n2": { "categories": ["biolink:ChemicalEntity"] }
+      }
+    }
+  },
+  {
+    "nl_query": "How are aldehydo-L-glucose and diabetes related",
+    "trapi_query": {
+      "nodes": {
+        "n0": { "ids": ["CHEBI:37626"] },
+        "un": { "categories": ["biolink:NamedThing"] },
+        "n2": { "ids": ["MONDO:0005015"] }
+      },
+      "edges": {
+        "e0": {
+          "subject": "n0",
+          "object": "un",
+          "predicates": ["biolink:related_to"],
+          "knowledge_type": "inferred"
+        },
+        "e1": {
+          "subject": "un",
+          "object": "n2",
+          "predicates": ["biolink:related_to"],
+          "knowledge_type": "inferred"
+        },
+        "e2": {
+          "subject": "n0",
+          "object": "n2",
+          "predicates": ["biolink:related_to"],
+          "knowledge_type": "inferred"
+        }
+      }
+    }
+  },
+  {
+    "nl_query": "What are some drugs that might be repurposed to treat castleman's disease?",
+    "trapi_query": {
+      "nodes": {
+        "ON": {
+          "categories": ["biolink:Disease"],
+          "ids": ["MONDO:0015564"]
+        },
+        "SN": { "categories": ["biolink:ChemicalEntity"] }
+      },
+      "edges": {
+        "e01": {
+          "subject": "SN",
+          "object": "ON",
+          "predicates": ["biolink:treats"],
+          "knowledge_type": "inferred"
+        }
+      }
+    }
+  },
+  {
+    "nl_query": "What drugs affect genes that are expressed in tissues related to cystic fibrosis",
+    "trapi_query": {
+      "nodes": {
+        "n0": {
+          "categories": ["biolink:Disease"],
+          "ids": ["MONDO:0009061"]
+        },
+        "n1": { "categories": ["biolink:GrossAnatomicalStructure"] },
+        "n2": { "categories": ["biolink:Gene"] },
+        "n3": {
+          "categories": ["biolink:Drug", "biolink:SmallMolecule"]
+        }
+      },
+      "edges": {
+        "e0": {
+          "subject": "n0",
+          "object": "n1",
+          "predicates": ["biolink:related_to"]
+        },
+        "e1": {
+          "subject": "n1",
+          "object": "n2",
+          "predicates": ["biolink:expresses"]
+        },
+        "e2": {
+          "subject": "n3",
+          "object": "n2",
+          "predicates": ["biolink:affects"]
+        }
+      }
+    }
+  },
+  {
+    "nl_query": "What are symptoms of tetralogy of fallot, gastric adenocarcinoma, and choroiditis?",
+    "trapi_query": {
+      "edges": {
+        "e00": {
+          "subject": "n00",
+          "object": "n01",
+          "predicates": ["biolink:has_phenotype"]
+        }
+      },
+      "nodes": {
+        "n00": {
+          "ids": [
+            "MONDO:0008542",
+            "MONDO:0005036",
+            "MONDO:0001280"
+          ]
+        },
+        "n01": {
+          "categories": ["biolink:PhenotypicFeature"]
+        }
+      }
+    }
+  },
+  {
+    "nl_query": "What are genes that decrease the activity of the gene TP53",
+    "trapi_query": {
+      "edges": {
+        "t_edge": {
+          "subject": "sn",
+          "object": "on",
+          "predicates": ["biolink:affects"],
+          "qualifier_constraints": [
+            {
+              "qualifier_set": [
+                {
+                  "qualifier_type_id": "biolink:object_aspect_qualifier",
+                  "qualifier_value": "activity_or_abundance"
+                },
+                {
+                  "qualifier_type_id": "biolink:object_direction_qualifier",
+                  "qualifier_value": "decreased"
+                }
+              ]
+            }
+          ],
+          "knowledge_type": "inferred"
+        }
+      },
+      "nodes": {
+        "on": {
+          "categories": ["biolink:Gene"],
+          "ids": ["NCBIGene:7157"]
+        },
+        "sn": { "categories": ["biolink:ChemicalEntity"] }
+      }
+    }
+  },
+  {
+    "nl_query": "What chemicals are associated with Tyrosinemia Type 1, and what genes are associated with those chemicals and the disease?",
+    "trapi_query": {
+      "edges": {
+        "e0": {
+          "subject": "n1",
+          "object": "n0",
+          "predicates": ["biolink:related_to"]
+        },
+        "e1": {
+          "subject": "n1",
+          "object": "n2",
+          "predicates": ["biolink:related_to"]
+        },
+        "e2": {
+          "subject": "n0",
+          "object": "n2",
+          "predicates": ["biolink:related_to"]
+        }
+      },
+      "nodes": {
+        "n0": { "ids": ["MONDO:0010161"] },
+        "n1": { "categories": ["biolink:Gene"] },
+        "n2": { "categories": ["biolink:ChemicalEntity"] }
+      }
+    }
+  }
+]

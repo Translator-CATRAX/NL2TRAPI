@@ -1,0 +1,42 @@
+# ─── Python artifacts ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+
+# virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# pip wheel / build dirs
+build/
+dist/
+*.egg-info/
+
+# Python dotenv
+.env
+.env.* 
+
+# ─── Chroma / data ──────────────────────────────────────────────────
+data/chroma_indexes/
+data/*.sqlite3
+data/exact_index.pkl
+data/nodes.json
+
+# biolink spec (you can regenerate locally)
+biolink-model.yaml
+
+# examples JSON (if you want, but small so up to you)
+# examples.json
+
+# ─── Editor / OS ────────────────────────────────────────────────────
+# VS Code
+.vscode/
+# PyCharm
+.idea/
+# macOS
+.DS_Store
+
+# logs
+*.log
