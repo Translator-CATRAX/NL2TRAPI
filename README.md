@@ -23,7 +23,7 @@ Turn natural-language biomedical questions into TRAPI-compliant Query Graphs usi
 * **Entity Recognition** with SciSpaCy (`en_ner_bionlp13cg_md`)
 * **Schema & Predicate Disambiguation** by embedding the Biolink-Model YAML in Chroma
 * **Few-shot Examples** stored in Chroma for prompt retrieval
-* **Fast Exact-Name Lookup** via a local pickle index of 5 GB+ of Biolink nodes
+* **Fast Exact-Name Lookup** via a local pickle index of 5 GB+ of Biolink nodes(CURIEs)
 * **Fallbacks & Repairs** with LLM-based fixes if the initial graph is invalid
 
 ---
@@ -70,7 +70,7 @@ Turn natural-language biomedical questions into TRAPI-compliant Query Graphs usi
 ## Data Preparation
 
 1. **Biolink Model YAML**
-   Download the latest spec and place it as `biolink-model.yaml` in the project root.
+   Download the latest biolink_model and place it as `biolink-model.yaml` in the project root.
 
 2. **Nodes Dump**
    Obtain the TRAPI-canonical `nodes.json` (≈4–5 GB, 7 M records) and save it under:
@@ -85,7 +85,7 @@ Turn natural-language biomedical questions into TRAPI-compliant Query Graphs usi
    ```json
    {
      "nl_query": "What proteins does acetaminophen interact with?",
-     "trapi_query": { /* TRAPI JSON */ }
+     "trapi_query": { / TRAPI JSON / }
    }
    ```
 
@@ -93,7 +93,7 @@ Turn natural-language biomedical questions into TRAPI-compliant Query Graphs usi
 
 ## Building Indices & Embeddings
 
-Run each of these **once** (or whenever your source files change):
+Run each of these **once** (or whenever the source files change):
 
 1. **Exact-Name Index**
 
@@ -125,7 +125,7 @@ Run each of these **once** (or whenever your source files change):
    python -m scripts.load_nodes_info
    ```
 
-   → populates Chroma collection `nodes_info`
+   → populates Chroma collection `nodes_info` 
 
 ---
 
@@ -151,7 +151,7 @@ pytest -q
 
 ## Configuration
 
-All configurable paths and model names live in `trapi_agent/config.py` (a Pydantic `Settings` model). You can override via environment variables or edit defaults directly:
+All configurable paths and model names live in `trapi_agent/config.py` (a Pydantic `Settings` model). It can be overridden via environment variables or edit defaults directly:
 
 * `DATA_DIR`
 * `CHROMA_PERSIST_PATH`
