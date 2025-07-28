@@ -13,6 +13,7 @@ Responsibilities:
 import chromadb
 from functools import lru_cache
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+from chromadb.api import ClientAPI
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +33,7 @@ def get_embedding_function() -> SentenceTransformerEmbeddingFunction:
     )
 
 @lru_cache(maxsize=1)
-def get_client() -> chromadb.interfaces.API:
+def get_client() -> ClientAPI:
     """
     Return a singleton Chromadb PersistentClient.
 
@@ -40,7 +41,7 @@ def get_client() -> chromadb.interfaces.API:
     """
     path = Path(settings.CHROMA_PERSIST_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
-    return chromadb.PersistentClient(path=str(path))
+    return chromadb.PersistentClient(path=str(settings.CHROMA_PERSIST_PATH))
 
 
 def get_collection(name: str) -> Any:

@@ -92,7 +92,8 @@ def node(state: TRAPIState) -> TRAPIState:
             name = hit.get("name", text)
             category = hit.get("category", "biolink:NamedThing")
             if not category.startswith("biolink:"):
-                category = f"biolink:{category.lstrip(":")}"  # enforce prefix
+                # category = f"biolink:{category.lstrip(":")}"  # enforce prefix
+                category = f"biolink:{category.lstrip(':')}"
             node_id = f"n{len(nodes)}"
             nodes[node_id] = {"id": curie, "name": name, "category": [category]}
             used_curies.add(curie)

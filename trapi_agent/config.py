@@ -1,87 +1,65 @@
 # trapi_agent/config.py
 
 from pathlib import Path
-from pydantic import BaseSettings, Field
+from pydantic_settings import BaseSettings
+from pydantic import Field
 
 
 class Settings(BaseSettings):
     """
-    Application configuration for NL→TRAPI agent.
+    Configuration for the NL→TRAPI agent.
 
     Attributes
     ----------
-    DATA_DIR
-        Filesystem path where all on‐disk data (nodes.json, exact_index.pkl,
-        Chroma DB files, etc.) are stored.
-    YAML_SCHEMA_COLLECTION
-        Name of the Chroma collection holding embedded Biolink YAML (classes & slots).
-    EXAMPLE_COLLECTION
-        Name of the Chroma collection holding NL→TRAPI few-shot examples.
-    NODES_COLLECTION
-        Name of the Chroma collection holding embedded node names for semantic lookup.
-    EXACT_INDEX_PKL
-        Path to the exact-match pickle built from the canonical nodes dump.
-    CHROMA_PERSIST_PATH
-        Filesystem path where Chroma persists its vector indexes.
-    LLM_NAME
-        Hugging Face model identifier for the text-generation LLM.
-    EMB_MODEL
-        Hugging Face model identifier for the sentence-embedding encoder.
-    MAX_FIX_ATTEMPTS
-        Maximum number of auto-repair loops the agent will attempt on an invalid TRAPI graph.
+    DATA_DIR : Path
+        Base directory for all data artifacts (nodes, embeddings, etc.).
+    YAML_SCHEMA_COLLECTION : str
+        Chroma collection name for embedded Biolink YAML schema.
+    EXAMPLE_COLLECTION : str
+        Chroma collection name for NL→TRAPI few-shot examples.
+    NODES_COLLECTION : str
+        Chroma collection name for embedded biomedical node names.
+    EXACT_INDEX_PKL : Path
+        Local path to the pickle file containing exact-match node index.
+    CHROMA_PERSIST_PATH : Path
+        Local path where ChromaDB stores vector index data.
+    LLM_NAME : str
+        HuggingFace model identifier used for text generation.
+    EMB_MODEL : str
+        HuggingFace model identifier used for embeddings.
+    MAX_FIX_ATTEMPTS : int
+        Maximum number of auto-repair attempts for invalid TRAPI graphs.
     """
 
-    # ─── Paths & Collections ───────────────────────────────────────────
-    DATA_DIR: Path = Field(
-        default=Path(__file__).parent.parent / "data",
-        description="Base directory for all data artifacts."
-    )
-    YAML_SCHEMA_COLLECTION: str = Field(
-        default="yaml_schema",
-        description="Chroma collection name for Biolink schema embeddings."
-    )
-    EXAMPLE_COLLECTION: str = Field(
-        default="nl_to_trapi",
-        description="Chroma collection name for NL→TRAPI few-shot examples."
-    )
-    NODES_COLLECTION: str = Field(
-        default="nodes_info",
-        description="Chroma collection name for node name embeddings."
-    )
-    EXACT_INDEX_PKL: Path = Field(
-        default=DATA_DIR / "exact_index.pkl",
-        description="Path to exact-match index pickle for NodeResolver."
-    )
+    # Base data directory
+    base_data_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "data")
 
-    # ─── Chroma Settings ───────────────────────────────────────────────
-    CHROMA_PERSIST_PATH: Path = Field(
-        default=DATA_DIR / "chroma_indexes",
-        description="Filesystem path for ChromaDB persistence."
-    )
+    # Chroma collection names
+    YAML_SCHEMA_COLLECTION: str = "yaml_schema"
+    EXAMPLE_COLLECTION: str = "nl_to_trapi"
+    NODES_COLLECTION: str = "nodes_info"
 
-    # ─── Model Identifiers ─────────────────────────────────────────────
-    LLM_NAME: str = Field(
-        default="BioMistral/BioMistral-7B",
-        description="Hugging Face model name for text generation."
-    )
-    EMB_MODEL: str = Field(
-        default="pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb",
-        description="Hugging Face model name for sentence embeddings."
-    )
+    # File paths derived from base_data_dir
+    @property
+    def EXACT_INDEX_PKL(self) -> Path:
+        return self.base_data_dir / "exact_index.pkl"
 
-    # ─── Retry Policy ─────────────────────────────────────────────────
-    MAX_FIX_ATTEMPTS: int = Field(
-        default=3,
-        ge=0,
-        description="Maximum TRAPI fix attempts before giving up."
-    )
+    @property
+    def CHROMA_PERSIST_PATH(self) -> Path:
+        return self.base_data_dir / "chroma_indexes"
+
+    # Model identifiers
+    LLM_NAME: str = "BioMistral/BioMistral-7B"
+    EMB_MODEL: str = "pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb"
+
+    # Retry config
+    MAX_FIX_ATTEMPTS: int = 3
 
     class Config:
-        # Allow overriding via environment variables if needed
         env_prefix = "TRAPI_AGENT_"
         env_file = ".env"
         extra = "ignore"
 
 
-# Instantiate a singleton settings object for module-wide use
+# Instantiate a global config object
 settings = Settings()
