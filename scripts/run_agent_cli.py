@@ -1,80 +1,69 @@
 #!/usr/bin/env python3
 """
-Command-line interface for invoking the TRAPI agent graph on natural-language queries.
+scripts/run_agent_cli.py
+────────────────────────
+Command-line helper for NL→TRAPI.
 
-This script accepts a question (either as positional arguments or via stdin),
-passes it through the agent pipeline (`graph.invoke`), and prints the
-resulting TRAPI query_graph JSON or error messages.
+Examples
+--------
+$ PYTHONPATH=. python scripts/run_agent_cli.py \
+    "What proteins does acetaminophen interact with?"
 
-Usage:
-    python -m scripts.run_agent_cli "What drugs treat asthma?"
-    echo "What proteins interact with aspirin?" | python -m scripts.run_agent_cli
+# or read from stdin
+$ echo "What drugs treat asthma?" | PYTHONPATH=. python scripts/run_agent_cli.py
 """
+
+from __future__ import annotations
 
 import argparse
 import json
 import logging
 import sys
-from typing import Dict, Any
 
-from trapi_agent.agent_graph import graph
+from trapi_agent.service import run_agent   # single entry-point → keeps models warm (loaded once per process)
 
 
-def parse_args() -> argparse.Namespace:
-    """
-    Parse command-line arguments for the agent CLI.
 
-    Returns:
-        argparse.Namespace with attribute `query` (list of tokens).
-    """
+# Argument parsing                                                            
+
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run the TRAPI agent on a natural-language query"
+        description="Invoke the NL→TRAPI agent on a natural-language query"
     )
     parser.add_argument(
         "query",
         nargs="*",
-        help="The natural-language query. If omitted, read from stdin."
+        help="Natural-language question (omit to read from stdin)",
     )
     return parser.parse_args()
 
 
-def main() -> None:
-    """
-    Entry point: constructs the query string, invokes the graph,
-    and prints the JSON output or errors.
-    """
-    args = parse_args()
 
-    # Configure logging
+# Main                                                                        
+
+def main() -> None:
+    args = _parse_args()
+
+    # Resolve input text
+    query_text: str = (
+        " ".join(args.query) if args.query else sys.stdin.read().strip()
+    )
+    if not query_text:
+        sys.stderr.write("  No query provided (args or stdin required).\n")
+        sys.exit(2)
+
+    # Minimal logging (inherits project-wide config if present)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    logger = logging.getLogger(__name__)
+    logging.getLogger(__name__).info("Invoking agent for query: %s", query_text)
 
-    # Determine query text
-    if args.query:
-        query_text = " ".join(args.query)
-    else:
-        query_text = sys.stdin.read().strip()
+    # Call the shared helper (loads graph + caches models only once per process)
+    result = run_agent(query_text)
 
-    if not query_text:
-        logger.error("No query provided. Use positional args or pipe input text.")
-        sys.exit(2)
-
-    logger.info("Invoking agent for query: %s", query_text)
-
-    # Run the agent pipeline
-    final_state: Dict[str, Any] = graph.invoke({"query": query_text})
-
-    # Output
-    if final_state.get("valid"):
-        print(json.dumps(final_state["output_json"], indent=2))
-        sys.exit(0)
-    else:
-        errors = final_state.get("errors", ["Unknown failure"])
-        logger.error(" Query invalid after fixes: %s", errors)
-        sys.exit(1)
+    # Pretty-print JSON to stdout
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":
