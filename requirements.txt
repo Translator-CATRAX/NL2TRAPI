@@ -38,6 +38,9 @@ bitsandbytes==0.43.1              # 4-bit & 8-bit quantisation
 pytest==8.2.0
 graphviz==0.20.3                  # for pipeline flowchart generation
 
+#MODEL_URL="https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bionlp13cg_md-0.5.4.tar.gz"
+#pip install "$MODEL_URL"
+
 # (GPU users) pick the right torch wheel:
 #pip install torch==2.2.2+cu118 --index-url https://download.pytorch.org/whl/cu118
 
