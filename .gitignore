@@ -4,7 +4,7 @@ __pycache__/
 *$py.class
 
 # virtual environments
-.venv/
+.venv*/
 venv/
 env/
 ENV/
@@ -40,4 +40,12 @@ biolink-model.yaml
 
 # logs
 *.log
- 
+
+
+# cache / model data
+*.pkl
+*.db
+biolink-model.yaml
+nodes.json
+# generated diagrams
+*.png

@@ -14,7 +14,7 @@ from functools import lru_cache
 from typing import List, Optional
 
 from transformers import pipeline, Pipeline
-
+import torch
 from ..config import settings
 
 
@@ -39,14 +39,15 @@ def get_llm() -> Pipeline:
 
     Automatically applies `device_map` and `torch_dtype` if `accelerate` is available.
     """
-    kwargs = {
+    kwargs: Dict = {
         "task": "text-generation",
         "model": settings.LLM_NAME,
         # ensure return format for post-processing
         "return_full_text": False,
     }
 
-    if _accelerate_available():
+    # if _accelerate_available():
+    if _accelerate_available() or torch.cuda.is_available():
         kwargs.update(device_map="auto", torch_dtype="auto")
 
     return pipeline(**kwargs)
