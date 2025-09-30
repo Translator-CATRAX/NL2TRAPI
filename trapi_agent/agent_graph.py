@@ -1,91 +1,144 @@
-from __future__ import annotations  # Required for generic type annotations in Python < 3.11
-
-"""
-Defines and compiles the LangGraph StateGraph for converting natural language queries
-into TRAPI Query Graphs.
-
-Workflow:
-  1. ParseQuery       – Extracts entities & predicate
-  2. ExampleRetrieval – Retrieves few-shot NL→TRAPI examples
-  3. ResolveEntities  – Resolves free-text entities to CURIEs + categories
-  4. ResolveSchema    – Resolves generic types and predicates to Biolink classes/predicates
-  5. ConstructTRAPI   – Constructs the query_graph portion of the TRAPI message
-  6. ValidateTRAPI    – Checks for valid structure (nodes, edges, predicates)
-  7. FixTRAPI         – Attempts repair if the TRAPI is invalid
-
-Entry point:    "ParseQuery"
-Success path:   END (if TRAPI is valid)
-Failure path:   Retry via FixTRAPI up to MAX_FIX_ATTEMPTS → END
-"""
+from __future__ import annotations
 
 import logging
+import importlib
+from typing import Any
 from langgraph.graph import StateGraph, END
 
 from .state_types import TRAPIState
 from .config import settings
-from .nodes import (
-    parse_query,
-    retrieve_examples,
-    resolve_entities,
-    resolve_schema,
-    construct_trapi,
-    validate_trapi,
-    fix_trapi,
-)
-
-__all__ = ["graph"]
+from .nodes import parse_query, resolve_entities, resolve_schema
+from .nodes import router as router_node
+from .nodes import fix_trapi as fix_node
+from .routes import registry as R  # central route registry
 
 logger = logging.getLogger(__name__)
 
+def _import_route_modules() -> None:
+    for mod in ("onehop", "pathfinder", "treats", "chem_gene"):
+        try:
+            importlib.import_module(f"{__package__}.routes.{mod}")
+            logger.debug("Imported route module: %s", mod)
+        except Exception as e:
+            logger.warning("⚠️ Failed importing route '%s': %s", mod, e)
 
-def build_agent_graph() -> StateGraph:
-    """
-    Assemble the LangGraph NL→TRAPI state machine pipeline.
+# Import at module import time (before graph is built)
+_import_route_modules()
 
-    Returns:
-        StateGraph instance ready for inference.
-    """
-    builder = StateGraph(TRAPIState)
+# Optional direct fallbacks if pathfinder not registered but nodes exist
+try:
+    from .nodes import construct_pathfinder as _cpf
+    from .nodes import validate_pathfinder as _vpf
+except Exception:
+    _cpf = _vpf = None  # type: ignore
 
-    # ── Stepwise pipeline ─────────────────────────────────────────────
-    builder.add_node("ParseQuery",        parse_query.node)
-    builder.add_node("ExampleRetrieval",  retrieve_examples.node)
-    builder.add_node("ResolveEntities",   resolve_entities.node)
-    builder.add_node("ResolveSchema",     resolve_schema.node)
-    builder.add_node("ConstructTRAPI",    construct_trapi.node)
-    builder.add_node("ValidateTRAPI",     validate_trapi.node)
-    builder.add_node("FixTRAPI",          fix_trapi.node)
 
-    # ── Linear edges ─────────────────────────────────────────────────
-    builder.add_edge("ParseQuery",        "ExampleRetrieval")
-    builder.add_edge("ExampleRetrieval",  "ResolveEntities")
-    builder.add_edge("ResolveEntities",   "ResolveSchema")
-    builder.add_edge("ResolveSchema",     "ConstructTRAPI")
-    builder.add_edge("ConstructTRAPI",    "ValidateTRAPI")
+def build_agent_graph() -> Any:
+    g = StateGraph(TRAPIState)
 
-    # ── Conditional edges: Validation success vs Fix loop ────────────
-    builder.add_conditional_edges(
-        "ValidateTRAPI",
-        {
-            END:        lambda s: s.get("valid", False),
-            "FixTRAPI": lambda s: not s.get("valid", False),
-        },
+    # ── Spine ─────────────────────────────────────────────────────────────────
+    g.add_node("ParseQuery",        parse_query.node)
+    g.add_node("Router",            router_node.node)
+    g.add_node("ResolveEntities",   resolve_entities.node)
+
+    def _set_route_flags(state: TRAPIState) -> TRAPIState:
+        # IMPORTANT: do NOT force 'onehop' here if unknown; keep the string.
+        inbound = state.get("route")
+        route = inbound or "onehop"
+        handler = R.ROUTES.get(route)
+
+        if handler is None:
+            # Keep requested route string; only derive skip_schema for pathfinder.
+            state["route"] = route
+            state["skip_schema"] = (route == "pathfinder")
+            logger.info(
+                "SetRouteFlags: inbound='%s' → kept route='%s' (registered=%s, skip_schema=%s)",
+                inbound, state["route"], False, state["skip_schema"],
+            )
+            return state
+
+        state["route"] = route
+        # handler.name
+        state["skip_schema"] = handler.skip_schema
+        logger.info(
+            "SetRouteFlags: inbound='%s' → handler='%s' (skip_schema=%s)",
+            inbound, handler.name, handler.skip_schema,
+        )
+        return state
+
+    g.add_node("SetRouteFlags", _set_route_flags)
+
+    # Schema resolver: no-ops if state['skip_schema'] is True
+    g.add_node("ResolveSchema", resolve_schema.node)
+
+    # Route-dispatched nodes (safe lookup + direct fallbacks)
+    def _construct(state: TRAPIState) -> TRAPIState:
+        route = state.get("route") or "onehop"
+        handler = R.ROUTES.get(route)
+        if handler is not None:
+            state["route"] = handler.name
+            return handler.construct(state)
+
+        if route == "pathfinder" and _cpf is not None:
+            state["route"] = "pathfinder"
+            return _cpf.node(state)
+
+        onehop = R.ROUTES.get("onehop")
+        if onehop is None:
+            raise RuntimeError("Required route 'onehop' failed to register.")
+        state["route"] = onehop.name
+        return onehop.construct(state)
+
+    def _validate(state: TRAPIState) -> TRAPIState:
+        route = state.get("route") or "onehop"
+        handler = R.ROUTES.get(route)
+        if handler is not None:
+            state["route"] = handler.name
+            return handler.validate(state)
+
+        if route == "pathfinder" and _vpf is not None:
+            state["route"] = "pathfinder"
+            return _vpf.node(state)
+
+        onehop = R.ROUTES.get("onehop")
+        if onehop is None:
+            raise RuntimeError("Required route 'onehop' failed to register.")
+        state["route"] = onehop.name
+        return onehop.validate(state)
+
+    g.add_node("Construct", _construct)
+    g.add_node("Validate",  _validate)
+
+    # LLM fixer (route-agnostic)
+    g.add_node("Fix", fix_node.node)
+
+    # ── Edges (linear flow + repair loop) ─────────────────────────────────────
+    g.set_entry_point("ParseQuery")
+    g.add_edge("ParseQuery",      "Router")
+    g.add_edge("Router",          "ResolveEntities")
+    g.add_edge("ResolveEntities", "SetRouteFlags")
+    g.add_edge("SetRouteFlags",   "ResolveSchema")
+    g.add_edge("ResolveSchema",   "Construct")
+    g.add_edge("Construct",       "Validate")
+
+    g.add_conditional_edges(
+        "Validate",
+        { END:  lambda s: s.get("valid", False),
+          "Fix": lambda s: not s.get("valid", False) }
+    )
+    g.add_conditional_edges(
+        "Fix",
+        { "Validate": lambda s: s.get("fix_attempts", 0) < settings.MAX_FIX_ATTEMPTS,
+          END:        lambda s: s.get("fix_attempts", 0) >= settings.MAX_FIX_ATTEMPTS }
     )
 
-    builder.add_conditional_edges(
-        "FixTRAPI",
-        {
-            "ValidateTRAPI": lambda s: s.get("fix_attempts", 0) < settings.MAX_FIX_ATTEMPTS,
-            END:             lambda s: s.get("fix_attempts", 0) >= settings.MAX_FIX_ATTEMPTS,
-        },
-    )
+    compiled = g.compile()
+    logger.info("✅ LangGraph compiled (linear spine + route flags + LLM repair loop).")
+    try:
+        logger.info("Registered routes: %s", sorted(R.ROUTES.keys()))
+    except Exception:
+        pass
+    return compiled
 
-    builder.set_entry_point("ParseQuery")
-    graph = builder.compile()
-
-    logger.info("✅ LangGraph NL→TRAPI pipeline compiled.")
-    return graph
-
-
-# Instantiate global graph for CLI use
-graph: StateGraph = build_agent_graph()
+# Global
+graph = build_agent_graph()

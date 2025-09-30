@@ -1,76 +1,132 @@
+# below code is after updating the pathfinder logic and  1 hop with quantity 2 and 1st pinned and 2nd unppinned (direction/ topplogy ?)
+
 #!/usr/bin/env python3
 """
 construct_trapi.py
 
-LangGraph node for assembling a minimal TRAPI query_graph from resolved nodes and predicate.
+LangGraph node that assembles a minimal TRAPI 1.4+ query_graph from
+resolved nodes and a predicate.
 
-This node:
-  • Validates that at least two nodes exist.
-  • Selects subject and object via a simple heuristic:
-      - First node without an explicit 'id' (unresolved) → subject
-      - Next available node → object
-      - Falls back to the first two nodes if needed.
-  • Ensures each node dict has a 'name' key (empty string if missing).
-  • Builds an edge with a TRAPI-compliant 'predicates' list (v1.4+).
+Heuristics
+----------
+• Prefer SUBJECT = the first *unpinned* node (no 'id' and not 'pinned').
+• Prefer OBJECT  = the first *pinned* node (has 'id').
+• If those don't exist, fall back gracefully to the first two nodes.
 
-Inputs (state):
-  - state['nodes']: Dict[node_id, {'id'? str, 'name'? str, 'category': List[str]}]
-  - state['predicate']: str (biolink CURIE)
-
-Outputs (state):
-  - state['edges']: Dict[edge_id, {'subject': node_id, 'object': node_id, 'predicates': [str]}]
-  - state['output_json']: { 'message': { 'query_graph': {...} }}
+Other niceties
+--------------
+• Ensure each node has a 'name' (empty string if missing).
+• Ensure predicate is a 'biolink:*' CURIE (fallback 'biolink:related_to').
+• (Default) keep only the two nodes used by e0 to avoid stray nodes.
+• Emit TRAPI 1.4 node fields: 'ids' and 'categories' (not internal 'id'/'category').
 """
 
 from __future__ import annotations
+
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from ..state_types import TRAPIState
 
 logger = logging.getLogger(__name__)
 
+# Set this to False if you want to keep any extra nodes that may exist in state["nodes"]
+PRUNE_TO_TWO_NODES = True
+
+
+def _choose_subject_object(nodes: Dict[str, Dict[str, Any]]) -> Tuple[str, str]:
+    """Pick subject and object node ids following the heuristic described above."""
+    node_ids: List[str] = list(nodes.keys())
+    if len(node_ids) >= 2:
+        # Partition nodes
+        unpinned = [nid for nid, data in nodes.items() if not data.get("id") and not data.get("pinned")]
+        pinned   = [nid for nid, data in nodes.items() if data.get("id")]
+
+        # SUBJECT: prefer unpinned
+        subj = unpinned[0] if unpinned else node_ids[0]
+
+        # OBJECT: prefer pinned (not equal to subj)
+        obj = None
+        for nid in pinned:
+            if nid != subj:
+                obj = nid
+                break
+
+        # If we didn't find a pinned object, try another unpinned (not subj)
+        if obj is None:
+            for nid in unpinned:
+                if nid != subj:
+                    obj = nid
+                    break
+
+        # Final fallback: first node that isn't subj; else the first two nodes
+        if obj is None:
+            for nid in node_ids:
+                if nid != subj:
+                    obj = nid
+                    break
+
+        if obj is None and len(node_ids) >= 2:
+            subj, obj = node_ids[0], node_ids[1]
+
+        return subj, obj
+
+    # If fewer than 2 nodes, just mirror (caller will handle insufficiency)
+    only = node_ids[0] if node_ids else "n0"
+    return only, only
+
+
+def _to_trapi_node(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Map internal node metadata → TRAPI 1.4 node object."""
+    out: Dict[str, Any] = {}
+    if meta.get("id"):
+        out["ids"] = [meta["id"]]
+    if meta.get("category"):
+        # internal key 'category' (list[str]) → TRAPI 'categories'
+        out["categories"] = list(meta["category"])
+    # 'name' isn't required by TRAPI but is handy for UI/debug
+    if meta.get("name") is not None:
+        out["name"] = meta["name"]
+    return out
+
 
 def node(state: TRAPIState) -> TRAPIState:
     """
-    Assemble a TRAPI query_graph from resolved nodes and predicate.
-
-    Args:
-        state: The TRAPIState dict, expecting 'nodes' and 'predicate'.
-
-    Returns:
-        The updated state with 'edges' and 'output_json' set.
+    Build a single-edge TRAPI query_graph from 'nodes' and 'predicate'.
+    Writes:
+      state['edges']
+      state['output_json'] = { 'message': { 'query_graph': {...} } }
     """
-    nodes_dict: Dict[str, Dict[str, Any]] = state.get("nodes", {})
+    nodes_dict: Dict[str, Dict[str, Any]] = state.get("nodes", {}) or {}
+    predicate_curie: str = (state.get("predicate") or "").strip() or "biolink:related_to"
+    if not predicate_curie.startswith("biolink:"):
+        predicate_curie = "biolink:related_to"
 
-    # Need at least two nodes to form an edge
+    # Need at least two nodes
     if len(nodes_dict) < 2:
         logger.warning("Insufficient nodes to construct edge: %d found", len(nodes_dict))
         state["output_json"] = {}
         return state
 
-    # Subject/object selection
-    subj_id: str | None = None
-    obj_id: str | None = None
-    for node_id, metadata in nodes_dict.items():
-        if "id" not in metadata and subj_id is None:
-            subj_id = node_id
-        elif obj_id is None:
-            obj_id = node_id
-        if subj_id and obj_id:
-            break
-    # Fallback to first two nodes
-    node_keys = list(nodes_dict.keys())
-    subj_id = subj_id or node_keys[0]
-    obj_id = obj_id or node_keys[1]
+    # Pick subject/object with the generic-first heuristic
+    subj_id, obj_id = _choose_subject_object(nodes_dict)
     logger.debug("Selected subject '%s', object '%s'", subj_id, obj_id)
 
-    # Ensure 'name' field exists on each node (for UI convenience)
-    for metadata in nodes_dict.values():
-        metadata.setdefault("name", "")
+    # Ensure each node has a 'name' key (UI convenience)
+    for meta in nodes_dict.values():
+        meta.setdefault("name", "")
+
+    # Optionally prune to just the two nodes we use (keeps one-hop QG clean)
+    if PRUNE_TO_TWO_NODES:
+        kept = {subj_id: nodes_dict[subj_id], obj_id: nodes_dict[obj_id]}
+        nodes_dict = kept
+        # Re-assign to state so downstream validation sees the pruned set
+        state["nodes"] = nodes_dict
+
+    # Build TRAPI-compliant nodes
+    qg_nodes: Dict[str, Dict[str, Any]] = {nid: _to_trapi_node(meta) for nid, meta in nodes_dict.items()}
 
     # Build the single edge
-    predicate_curie: str = state.get("predicate", "biolink:related_to")
     edge_id = "e0"
     edges: Dict[str, Dict[str, Any]] = {
         edge_id: {
@@ -80,15 +136,16 @@ def node(state: TRAPIState) -> TRAPIState:
         }
     }
 
-    # Write back to state
+    # Persist to state
     state["edges"] = edges
     state["output_json"] = {
         "message": {
             "query_graph": {
-                "nodes": nodes_dict,
+                "nodes": qg_nodes,
                 "edges": edges,
             }
         }
     }
-    logger.info("Constructed query_graph with %d nodes and 1 edge", len(nodes_dict))
+
+    logger.info("Constructed query_graph with %d node(s) and 1 edge", len(qg_nodes))
     return state
