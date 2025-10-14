@@ -11,6 +11,7 @@ class Route:
     skip_schema: bool
     construct: NodeFn
     validate: NodeFn
+    fix_trapi: bool = False  
 
 ROUTES: Dict[str, Route] = {}
 

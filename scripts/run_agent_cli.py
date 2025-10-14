@@ -1,3 +1,5 @@
+
+
 #!/usr/bin/env python3
 """
 Command-line interface for invoking the TRAPI agent graph on natural-language queries.
@@ -5,6 +7,7 @@ Command-line interface for invoking the TRAPI agent graph on natural-language qu
 Usage:
     python -m scripts.run_agent_cli "What drugs treat asthma?"
     python -m scripts.run_agent_cli "Find paths between ibuprofen and COX1" --route pathfinder
+    python -m scripts.run_agent_cli "what genes are upregulated by filgrastim?" --route xcrg
     echo "What proteins interact with aspirin?" | python -m scripts.run_agent_cli
 """
 from __future__ import annotations
@@ -17,7 +20,9 @@ from typing import Dict, Any
 
 from trapi_agent.agent_graph import graph
 
-ROUTE_CHOICES = ["onehop", "pathfinder", "treats", "chem_gene", "multihop"]
+# Add xcrg to the allowed routes
+ROUTE_CHOICES = ["onehop", "pathfinder", "pathfinder_constrained", "treats", "chem_gene", "multihop", "xcrg"]
+
 
 
 def parse_args() -> argparse.Namespace:

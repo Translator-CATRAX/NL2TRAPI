@@ -94,6 +94,10 @@ def _lexical_generic_hints(text: str) -> List[str]:
         hints.add("biolink:Pathway")
     if re.search(r"\btissue(s)?\b|\banatom(y|ical)\b|\borgan(s)?\b|\bcell (type|types)\b", t):
         hints.add("biolink:AnatomicalEntity")
+        
+    if re.search(r"\bdisease(s)?\b", t):
+        hints.add("biolink:Disease")
+
 
     return list(hints)
 

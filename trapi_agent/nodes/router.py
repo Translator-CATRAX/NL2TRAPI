@@ -2,10 +2,14 @@
 """
 router.py
 
-Choose the route based on CLI override or keyword heuristics.
+Pick a route from an explicit override (CLI/UI) or simple keyword heuristics.
+
 Outputs:
-  - state['route']
-  - state['skip_schema'] (True only for 'pathfinder')
+  - state['route']  (only)
+NOTE:
+  - Do NOT set state['skip_schema'] here; SetRouteFlags in agent_graph does that
+    using the route registry (Route.skip_schema).
+  - Do NOT set state['predicate'] here; parse_query/construct_* handle it.
 """
 from __future__ import annotations
 import logging
@@ -14,16 +18,24 @@ from ..state_types import TRAPIState
 logger = logging.getLogger(__name__)
 
 KEYWORDS = {
-    "pathfinder": ["path", "paths", "pathway", "connected"],
-    "treats": ["treat", "treats", "therapy for"],
+    # Two-CURIE path query
+    "pathfinder": [
+        "path", "paths", "pathway", "between", "connected",
+        "connection", "connect", "link", "links", "shortest"
+    ],
+    # xDTD: Drug treats Disease
+    "treats": [
+        "treat", "treats", "treating", "treatment", "treatments",
+        "therapy for", "drug", "drugs for"
+    ],
+    # Chemical ↔ Gene/Protein one-hop
     "chem_gene": ["gene", "protein"],
 }
 
 def node(state: TRAPIState) -> TRAPIState:
-    # 1) Respect explicit route (e.g., CLI)
+    # 1) Respect explicit route (e.g., CLI/UI dropdown)
     if state.get("route"):
-        state["skip_schema"] = (state["route"] == "pathfinder")
-        logger.info("Router picked route=%s skip_schema=%s", state["route"], state["skip_schema"])
+        logger.info("Router picked route=%s", state["route"])
         return state
 
     # 2) Infer from query keywords
@@ -31,12 +43,10 @@ def node(state: TRAPIState) -> TRAPIState:
     for route, toks in KEYWORDS.items():
         if any(tok in q for tok in toks):
             state["route"] = route
-            state["skip_schema"] = (route == "pathfinder")
-            logger.info("Router picked route=%s skip_schema=%s", state["route"], state["skip_schema"])
+            logger.info("Router picked route=%s", route)
             return state
 
     # 3) Default
     state["route"] = "onehop"
-    state["skip_schema"] = False
-    logger.info("Router picked route=%s skip_schema=%s", state["route"], state["skip_schema"])
+    logger.info("Router picked route=onehop")
     return state

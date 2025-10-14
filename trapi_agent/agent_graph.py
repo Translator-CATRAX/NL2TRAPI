@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import logging
@@ -14,13 +15,16 @@ from .routes import registry as R  # central route registry
 
 logger = logging.getLogger(__name__)
 
+
 def _import_route_modules() -> None:
-    for mod in ("onehop", "pathfinder", "treats", "chem_gene"):
+    # Register all available routes (explicit routing uses these)
+    for mod in ("onehop", "pathfinder", "treats", "chem_gene", "xcrg","pathfinder_constrained"):
         try:
             importlib.import_module(f"{__package__}.routes.{mod}")
             logger.debug("Imported route module: %s", mod)
         except Exception as e:
-            logger.warning("⚠️ Failed importing route '%s': %s", mod, e)
+            logger.warning(" Failed importing route '%s': %s", mod, e)
+
 
 # Import at module import time (before graph is built)
 _import_route_modules()
@@ -42,13 +46,12 @@ def build_agent_graph() -> Any:
     g.add_node("ResolveEntities",   resolve_entities.node)
 
     def _set_route_flags(state: TRAPIState) -> TRAPIState:
-        # IMPORTANT: do NOT force 'onehop' here if unknown; keep the string.
         inbound = state.get("route")
         route = inbound or "onehop"
         handler = R.ROUTES.get(route)
 
         if handler is None:
-            # Keep requested route string; only derive skip_schema for pathfinder.
+            # Keep the requested route string; only guess skip_schema for pathfinder
             state["route"] = route
             state["skip_schema"] = (route == "pathfinder")
             logger.info(
@@ -57,8 +60,8 @@ def build_agent_graph() -> Any:
             )
             return state
 
-        state["route"] = route
-        # handler.name
+        # Canonicalize to the registered handler
+        state["route"] = handler.name
         state["skip_schema"] = handler.skip_schema
         logger.info(
             "SetRouteFlags: inbound='%s' → handler='%s' (skip_schema=%s)",
@@ -123,13 +126,17 @@ def build_agent_graph() -> Any:
 
     g.add_conditional_edges(
         "Validate",
-        { END:  lambda s: s.get("valid", False),
-          "Fix": lambda s: not s.get("valid", False) }
+        {
+            END:  lambda s: s.get("valid", False),
+            "Fix": lambda s: not s.get("valid", False),
+        }
     )
     g.add_conditional_edges(
         "Fix",
-        { "Validate": lambda s: s.get("fix_attempts", 0) < settings.MAX_FIX_ATTEMPTS,
-          END:        lambda s: s.get("fix_attempts", 0) >= settings.MAX_FIX_ATTEMPTS }
+        {
+            "Validate": lambda s: s.get("fix_attempts", 0) < settings.MAX_FIX_ATTEMPTS,
+            END:        lambda s: s.get("fix_attempts", 0) >= settings.MAX_FIX_ATTEMPTS,
+        }
     )
 
     compiled = g.compile()
@@ -139,6 +146,7 @@ def build_agent_graph() -> Any:
     except Exception:
         pass
     return compiled
+
 
 # Global
 graph = build_agent_graph()
