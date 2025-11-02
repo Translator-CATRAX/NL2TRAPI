@@ -38,7 +38,8 @@ def _two_pinned(nodes):
     for nid, meta in nodes.items():
         curie = meta.get("id")
         if curie and curie not in seen:
-            out.append((nid, curie))
+            label = meta.get("name")
+            out.append((nid, curie, label))
             seen.add(curie)
         if len(out) == 2:
             break
@@ -55,9 +56,11 @@ def node(state: TRAPIState) -> TRAPIState:
     # Re-key as n0/n1 in output for cleanliness
     qg_nodes: Dict[str, Dict[str, Any]] = {}
     path_nodes: List[str] = []
-    for i, (_, curie) in enumerate(pinned[:2]):
+    for i, (_, curie, label) in enumerate(pinned[:2]):
         nid = f"n{i}"
         qg_nodes[nid] = {"ids": [curie]}
+        if label or curie:
+            qg_nodes[nid]["name"] = label or curie
         path_nodes.append(nid)
 
     # Construct paths p0 only if we got two nodes

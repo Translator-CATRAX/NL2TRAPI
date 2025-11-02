@@ -40,13 +40,14 @@ def _unique(seq: List[str]) -> List[str]:
     return out
 
 
-def _pick_two_pinned(nodes: Dict[str, Dict[str, Any]]) -> List[Tuple[str, str]]:
-    """Return up to 2 (node_id, CURIE) pairs for pinned nodes."""
+def _pick_two_pinned(nodes: Dict[str, Dict[str, Any]]) -> List[Tuple[str, str, str | None]]:
+    """Return up to 2 (node_id, CURIE, label) triples for pinned nodes."""
     seen, out = set(), []
     for nid, meta in (nodes or {}).items():
         curie = meta.get("id")
         if curie and curie not in seen:
-            out.append((nid, curie))
+            label = meta.get("name")
+            out.append((nid, curie, label))
             seen.add(curie)
         if len(out) == 2:
             break
@@ -153,8 +154,12 @@ def node(state: TRAPIState) -> TRAPIState:
 
     # Re-key as n0/n1
     qg_nodes: Dict[str, Dict[str, Any]] = {}
-    for i, (_, curie) in enumerate(pinned[:2]):
-        qg_nodes[f"n{i}"] = {"ids": [curie]}
+    for i, (_, curie, label) in enumerate(pinned[:2]):
+        nid = f"n{i}"
+        node_obj: Dict[str, Any] = {"ids": [curie]}
+        if label or curie:
+            node_obj["name"] = label or curie
+        qg_nodes[nid] = node_obj
 
     p0: Dict[str, Any] = {
         "subject": "n0",

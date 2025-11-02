@@ -76,17 +76,23 @@ def _choose_subject_object(nodes: Dict[str, Dict[str, Any]]) -> Tuple[str, str]:
     return only, only
 
 
-def _to_trapi_node(meta: Dict[str, Any]) -> Dict[str, Any]:
+def _to_trapi_node(meta: Dict[str, Any], label_map: Dict[str, str] | None = None) -> Dict[str, Any]:
     """Map internal node metadata → TRAPI 1.4 node object."""
     out: Dict[str, Any] = {}
-    if meta.get("id"):
-        out["ids"] = [meta["id"]]
+    curie = meta.get("id")
+    if curie:
+        out["ids"] = [curie]
     if meta.get("category"):
         # internal key 'category' (list[str]) → TRAPI 'categories'
         out["categories"] = list(meta["category"])
     # 'name' isn't required by TRAPI but is handy for UI/debug
-    if meta.get("name") is not None:
-        out["name"] = meta["name"]
+    name = meta.get("name")
+    if curie and label_map:
+        name = label_map.get(curie) or name
+    if not name and curie:
+        name = curie
+    if name:
+        out["name"] = name
     return out
 
 
@@ -116,6 +122,8 @@ def node(state: TRAPIState) -> TRAPIState:
     for meta in nodes_dict.values():
         meta.setdefault("name", "")
 
+    label_map: Dict[str, str] = state.get("curie_labels", {})
+
     # Optionally prune to just the two nodes we use (keeps one-hop QG clean)
     if PRUNE_TO_TWO_NODES:
         kept = {subj_id: nodes_dict[subj_id], obj_id: nodes_dict[obj_id]}
@@ -124,7 +132,7 @@ def node(state: TRAPIState) -> TRAPIState:
         state["nodes"] = nodes_dict
 
     # Build TRAPI-compliant nodes
-    qg_nodes: Dict[str, Dict[str, Any]] = {nid: _to_trapi_node(meta) for nid, meta in nodes_dict.items()}
+    qg_nodes: Dict[str, Dict[str, Any]] = {nid: _to_trapi_node(meta, label_map) for nid, meta in nodes_dict.items()}
 
     # Build the single edge
     edge_id = "e0"

@@ -114,8 +114,13 @@ def _has_pinned_disease(nodes: Dict[str, Dict[str, Any]]) -> bool:
             return True
     return False
 
-def _add_pinned_node(nodes: Dict[str, Dict[str, Any]], used: Set[str],
-                     curie: str, name: str) -> None:
+def _add_pinned_node(
+    nodes: Dict[str, Dict[str, Any]],
+    used: Set[str],
+    curie: str,
+    name: str,
+    label_map: Dict[str, str] | None = None,
+) -> None:
     if curie in used:
         return
     nid = f"n{len(nodes)}"
@@ -126,6 +131,8 @@ def _add_pinned_node(nodes: Dict[str, Dict[str, Any]], used: Set[str],
         "pinned": True,
     }
     used.add(curie)
+    if label_map is not None and name:
+        label_map[curie] = name
 
 def _tokenize(q: str) -> List[str]:
     return re.findall(r"[A-Za-z0-9][A-Za-z0-9’'\-]*", q or "")
@@ -248,6 +255,7 @@ def node(state: TRAPIState) -> TRAPIState:  # noqa: C901
 
     # Track used CURIEs to avoid duplicates
     used: Set[str] = {d.get("id") for d in nodes.values() if d.get("id")}
+    curie_labels: Dict[str, str] = state.setdefault("curie_labels", {})
 
     # 1) Normal resolution for any extracted entities
     for text in state.get("entities", []):
@@ -264,14 +272,14 @@ def node(state: TRAPIState) -> TRAPIState:  # noqa: C901
         # Try NodeNorm, then local resolver
         curie, label, _ = nn_lookup(text, mode="lookup")
         if curie and curie not in used:
-            _add_pinned_node(nodes, used, curie, label or text)
+            _add_pinned_node(nodes, used, curie, label or text, curie_labels)
             continue
 
         res = _resolver()
         if res:
             hit = res.resolve(text)
             if hit and hit.get("id") and hit["id"] not in used:
-                _add_pinned_node(nodes, used, hit["id"], hit.get("name", text))
+                _add_pinned_node(nodes, used, hit["id"], hit.get("name", text), curie_labels)
                 continue
 
         # Placeholder (typed later by ResolveSchema, unless route skips schema)
@@ -300,6 +308,8 @@ def node(state: TRAPIState) -> TRAPIState:  # noqa: C901
                 "pinned": True,
             }
             used.add(curie)
+            if label:
+                curie_labels[curie] = label
             logger.info("Treats fallback pinned disease: %s → %s", label, curie)
         else:
             logger.warning("Treats fallback could not pin disease from query: %r", q)
@@ -318,6 +328,8 @@ def node(state: TRAPIState) -> TRAPIState:  # noqa: C901
                 "pinned": True,
             }
             used.add(curie)
+            if label:
+                curie_labels[curie] = label
             logger.info("Generic fallback pinned entity: %s → %s (category=%s)", label, curie, cat)
         else:
             logger.warning("Generic fallback could not pin any entity from query: %r", q)

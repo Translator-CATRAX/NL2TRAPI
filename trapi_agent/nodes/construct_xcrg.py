@@ -25,19 +25,22 @@ def _direction_from_query(q: str) -> str:
     # default to “increased” if ambiguous
     return "increased"
 
-def _find_pinned(nodes: Dict[str, Dict[str, Any]]) -> tuple[Optional[str], Optional[str]]:
-    """Return (curie, category) for any pinned node if present."""
+def _find_pinned(nodes: Dict[str, Dict[str, Any]]) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Return (curie, category, label) for the first pinned node if present."""
     for _, meta in (nodes or {}).items():
         curie = meta.get("id")
         if not curie:
             continue
         cats = set(meta.get("category") or [])
         if not cats:
-            cats = {category_from_curie(curie)}
+            inferred = category_from_curie(curie)
+            if inferred:
+                cats = {inferred}
         # pick the first declared cat
-        cat = next(iter(cats))
-        return curie, cat
-    return None, None
+        cat = next(iter(cats)) if cats else None
+        label = meta.get("name")
+        return curie, cat, label
+    return None, None, None
 
 def node(state: TRAPIState) -> TRAPIState:
     """
@@ -55,7 +58,7 @@ def node(state: TRAPIState) -> TRAPIState:
     src_nodes: Dict[str, Dict[str, Any]] = state.get("nodes", {}) or {}
     q = state.get("query", "") or ""
 
-    pinned_id, pinned_cat = _find_pinned(src_nodes)
+    pinned_id, pinned_cat, pinned_name = _find_pinned(src_nodes)
     direction = _direction_from_query(q)
 
     qg_nodes: Dict[str, Any] = {}
@@ -63,10 +66,14 @@ def node(state: TRAPIState) -> TRAPIState:
     if pinned_id and pinned_cat in _GENE_CATS:
         # Gene pinned → it must be the object
         qg_nodes["on"] = {"categories": ["biolink:Gene"], "ids": [pinned_id]}
+        if pinned_name or pinned_id:
+            qg_nodes["on"]["name"] = pinned_name or pinned_id
         qg_nodes["sn"] = {"categories": ["biolink:ChemicalEntity"]}
     elif pinned_id and (pinned_cat in _CHEM_CATS or pinned_cat == "biolink:NamedThing"):
         # Chemical pinned → it must be the subject
         qg_nodes["sn"] = {"categories": ["biolink:ChemicalEntity"], "ids": [pinned_id]}
+        if pinned_name or pinned_id:
+            qg_nodes["sn"]["name"] = pinned_name or pinned_id
         qg_nodes["on"] = {"categories": ["biolink:Gene"]}
     else:
         # No pinned or ambiguous: prefer “chemical → gene” (most common for xCRG)
@@ -75,6 +82,8 @@ def node(state: TRAPIState) -> TRAPIState:
         if pinned_id:
             # If we had a pinned but couldn’t classify, put it on chemical side by default
             qg_nodes["sn"]["ids"] = [pinned_id]
+            if pinned_name or pinned_id:
+                qg_nodes["sn"]["name"] = pinned_name or pinned_id
 
     qg_edges: Dict[str, Any] = {
         "t_edge": {

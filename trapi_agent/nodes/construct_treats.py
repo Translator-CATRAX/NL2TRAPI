@@ -76,6 +76,12 @@ def node(state: TRAPIState) -> TRAPIState:
     """
     src_nodes: Dict[str, Dict[str, Any]] = state.get("nodes", {}) or {}
     disease_id = _pick_pinned_disease(src_nodes)
+    disease_name = None
+    if disease_id:
+        for meta in src_nodes.values():
+            if meta.get("id") == disease_id:
+                disease_name = meta.get("name")
+                break
 
     # Exact shape/keys requested
     qg_nodes: Dict[str, Any] = {
@@ -92,6 +98,8 @@ def node(state: TRAPIState) -> TRAPIState:
     }
     if disease_id:
         qg_nodes["on"]["ids"] = [disease_id]
+        if disease_name or disease_id:
+            qg_nodes["on"]["name"] = disease_name or disease_id
 
     qg_edges: Dict[str, Any] = {
         "t_edge": {

@@ -7,15 +7,21 @@ logger = logging.getLogger(__name__)
 
 PRUNE_TO_TWO_NODES = True  # avoid stray/unreferenced nodes
 
-def _to_trapi_node(meta: Dict[str, Any]) -> Dict[str, Any]:
+def _to_trapi_node(meta: Dict[str, Any], label_map: Dict[str, str] | None = None) -> Dict[str, Any]:
     """Map internal node metadata → TRAPI 1.4 node object."""
     out: Dict[str, Any] = {}
-    if meta.get("id"):
-        out["ids"] = [meta["id"]]
+    curie = meta.get("id")
+    if curie:
+        out["ids"] = [curie]
     if meta.get("category"):
         out["categories"] = list(meta["category"])
-    if meta.get("name") is not None:
-        out["name"] = meta["name"]
+    name = meta.get("name")
+    if curie and label_map:
+        name = label_map.get(curie) or name
+    if not name and curie:
+        name = curie
+    if name:
+        out["name"] = name
     return out
 
 def _pick_by_cat(
@@ -48,6 +54,8 @@ def make_edge_constructor(
         for m in nodes.values():
             m.setdefault("name", "")
 
+        label_map: Dict[str, str] = state.get("curie_labels", {})
+
         subj, obj = _pick_by_cat(nodes, subj_cats, obj_cats)
 
         # fallbacks: allow class placeholders if pinned not found
@@ -67,7 +75,7 @@ def make_edge_constructor(
 
         # If we still don't have a valid pair, emit nodes-only; validator will flag it.
         if not subj or not obj or subj == obj:
-            qg_nodes = {nid: _to_trapi_node(m) for nid, m in nodes.items()}
+            qg_nodes = {nid: _to_trapi_node(m, label_map) for nid, m in nodes.items()}
             if PRUNE_TO_TWO_NODES and len(qg_nodes) > 2:
                 keep = list(qg_nodes.keys())[:2]
                 qg_nodes = {k: qg_nodes[k] for k in keep}
@@ -87,7 +95,7 @@ def make_edge_constructor(
         state["output_json"] = {
             "message": {
                 "query_graph": {
-                    "nodes": {nid: _to_trapi_node(m) for nid, m in qg_nodes.items()},
+                    "nodes": {nid: _to_trapi_node(m, label_map) for nid, m in qg_nodes.items()},
                     "edges": {"e0": edge}
                 }
             }
