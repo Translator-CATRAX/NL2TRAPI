@@ -11,6 +11,7 @@ Responsibilities:
 """
 
 import chromadb
+import torch
 from functools import lru_cache
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from chromadb.api import ClientAPI
@@ -27,9 +28,10 @@ def get_embedding_function() -> SentenceTransformerEmbeddingFunction:
 
     Uses LRU cache to ensure only one instance is created.
     """
+    device = "cuda" if settings.PREFER_GPU and torch.cuda.is_available() else "cpu"
     return SentenceTransformerEmbeddingFunction(
         model_name=settings.EMB_MODEL,
-        device="cuda"
+        device=device
     )
 
 @lru_cache(maxsize=1)

@@ -221,6 +221,17 @@
 #!/usr/bin/env python3
 # Streamlit demo for NL2TRAPI-langgraph (pyvis + optional voice with lazy imports)
 
+#!/usr/bin/env python3
+from __future__ import annotations
+
+
+import logging
+
+logging.basicConfig(
+    level=logging.DEBUG,  # use logging.INFO if you only care about summaries
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
 import json
 import logging
 import os
@@ -230,7 +241,6 @@ from typing import Any, Dict, List, Tuple
 
 import streamlit as st
 from trapi_agent.agent_graph import graph
-
 # ─────────────────────────── Optional deps (safe-guarded) ───────────────────────────
 _HAS_PYVIS = False
 try:
@@ -518,3 +528,8 @@ if run:
 # # lsof -i:7860
 # # kill -9 3607435
 # # pkill -f streamlit
+# find . -type d -name "__pycache__" -exec rm -rf {} +
+ 
+#  set -a; source .env; set +a
+#  export NO_LLM=1
+#  export ALLOW_EMPTY_LLM=1

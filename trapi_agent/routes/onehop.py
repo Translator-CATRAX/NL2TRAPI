@@ -4,7 +4,7 @@ from ..nodes import construct_trapi, validate_trapi
 
 register(Route(
     name="onehop",
-    skip_schema=False,                 # uses ResolveSchema
+    skip_schema=True,                  # one-hop now self-grounds predicate/categories
     construct=construct_trapi.node,    # your current 1-hop constructor
     validate=validate_trapi.node,
 ))

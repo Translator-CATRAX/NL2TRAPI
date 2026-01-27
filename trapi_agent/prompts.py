@@ -12,22 +12,26 @@ This module defines the three core prompt formats used in the LangGraph:
 # ─── PARSE TEMPLATE ────────────────────────────────────────────────────────
 PARSE_TEMPLATE: str = """
 You are a biomedical NLP assistant.
-The NER tool already spotted these spans in the question:
-{spans}
 
-These are the extracted entity strings:
-{entities}
+Goal:
+  • Choose EXACTLY one Biolink predicate CURIE (e.g. "biolink:expressed_in").
+  • Re-emit the entity list and generic type list exactly as provided.
 
-These are the generic Biolink types for those entities:
-{types}
+Context from upstream NER:
+  spans: {spans}
+  entities: {entities}
+  generic_types: {types}
 
-Return EXACTLY this JSON (no extra keys) and nothing else:
-{{"entities": {entities}, "generic_types": {types}, "predicate": "<string>"}}
-
-Possible Biolink predicates you can pick from (choose one):
+Candidate predicates (if empty, reason from the question text):
 {predicate_choices}
 
-<|end|>
+Instructions:
+  • If the candidate list is non-empty, you MUST copy one entry verbatim.
+  • Otherwise, infer the most specific Biolink predicate (CURIE form) suggested by the question.
+  • Return VALID JSON only. No comments, no trailing text, no missing braces.
+
+Return JSON in this shape (no additional keys, same key order):
+{{"entities": {entities}, "generic_types": {types}, "predicate": "<biolink:* CURIE>"}}
 
 Question: "{query}"
 JSON:

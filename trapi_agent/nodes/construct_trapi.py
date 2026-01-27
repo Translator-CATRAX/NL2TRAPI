@@ -24,7 +24,7 @@ Other niceties
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..state_types import TRAPIState
 
@@ -76,6 +76,48 @@ def _choose_subject_object(nodes: Dict[str, Dict[str, Any]]) -> Tuple[str, str]:
     return only, only
 
 
+def _choose_subject_object_by_role(
+    nodes: Dict[str, Dict[str, Any]],
+    subject_role: str | None,
+    object_role: str | None,
+) -> Tuple[str, str]:
+    node_ids: List[str] = list(nodes.keys())
+    pinned = [nid for nid, data in nodes.items() if data.get("id")]
+    unpinned = [nid for nid, data in nodes.items() if not data.get("id") and not data.get("pinned")]
+
+    def _pick(role: str | None, exclude: str | None = None) -> Optional[str]:
+        pool = node_ids
+        if role == "pinned":
+            pool = pinned or node_ids
+        elif role == "unpinned":
+            pool = unpinned or node_ids
+        for nid in pool:
+            if nid != exclude:
+                return nid
+        return None
+
+    subj = _pick(subject_role)
+    obj = _pick(object_role, exclude=subj)
+
+    if subj is None or obj is None:
+        return _choose_subject_object(nodes)
+
+    if subj == obj and len(node_ids) >= 2:
+        subj, obj = node_ids[0], node_ids[1]
+
+    return subj, obj
+
+
+def _find_node_id_by_text(nodes: Dict[str, Dict[str, Any]], text: str) -> Optional[str]:
+    norm = (text or "").strip().lower()
+    if not norm:
+        return None
+    for nid, meta in nodes.items():
+        if (meta.get("name") or "").strip().lower() == norm:
+            return nid
+    return None
+
+
 def _to_trapi_node(meta: Dict[str, Any], label_map: Dict[str, str] | None = None) -> Dict[str, Any]:
     """Map internal node metadata → TRAPI 1.4 node object."""
     out: Dict[str, Any] = {}
@@ -114,8 +156,23 @@ def node(state: TRAPIState) -> TRAPIState:
         state["output_json"] = {}
         return state
 
-    # Pick subject/object with the generic-first heuristic
-    subj_id, obj_id = _choose_subject_object(nodes_dict)
+    # Pick subject/object (onehop can provide explicit roles)
+    onehop = state.get("onehop_parse") or {}
+    if state.get("route") == "onehop" and onehop:
+        subj_id = _find_node_id_by_text(nodes_dict, onehop.get("subject_text", ""))
+        obj_id = _find_node_id_by_text(nodes_dict, onehop.get("object_text", ""))
+        if not subj_id or not obj_id:
+            role_subj, role_obj = _choose_subject_object_by_role(
+                nodes_dict,
+                onehop.get("subject_role"),
+                onehop.get("object_role"),
+            )
+            subj_id = subj_id or role_subj
+            obj_id = obj_id or role_obj
+        if subj_id == obj_id:
+            subj_id, obj_id = _choose_subject_object(nodes_dict)
+    else:
+        subj_id, obj_id = _choose_subject_object(nodes_dict)
     logger.debug("Selected subject '%s', object '%s'", subj_id, obj_id)
 
     # Ensure each node has a 'name' key (UI convenience)

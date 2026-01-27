@@ -8,7 +8,7 @@ from langgraph.graph import StateGraph, END
 
 from .state_types import TRAPIState
 from .config import settings
-from .nodes import parse_query, resolve_entities, resolve_schema
+from .nodes import parse_query, parse_onehop, resolve_entities, resolve_schema
 from .nodes import router as router_node
 from .nodes import fix_trapi as fix_node
 from .routes import registry as R  # central route registry
@@ -44,6 +44,7 @@ def build_agent_graph() -> Any:
     g.add_node("ParseQuery",        parse_query.node)
     g.add_node("Router",            router_node.node)
     g.add_node("ResolveEntities",   resolve_entities.node)
+    g.add_node("ParseOneHop",       parse_onehop.node)
 
     def _set_route_flags(state: TRAPIState) -> TRAPIState:
         inbound = state.get("route")
@@ -119,7 +120,8 @@ def build_agent_graph() -> Any:
     g.set_entry_point("ParseQuery")
     g.add_edge("ParseQuery",      "Router")
     g.add_edge("Router",          "ResolveEntities")
-    g.add_edge("ResolveEntities", "SetRouteFlags")
+    g.add_edge("ResolveEntities", "ParseOneHop")
+    g.add_edge("ParseOneHop",     "SetRouteFlags")
     g.add_edge("SetRouteFlags",   "ResolveSchema")
     g.add_edge("ResolveSchema",   "Construct")
     g.add_edge("Construct",       "Validate")

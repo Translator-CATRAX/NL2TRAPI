@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import os
 import re
 import pickle
@@ -18,6 +19,7 @@ __all__ = [
     "allowed_subject_categories",
     "allowed_object_categories",
     "canonicalize_class",  # lightweight class canonicalizer (no RAG)
+    "match_unpinned_category",
 ]
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -101,6 +103,13 @@ PRED_SYNONYM: Dict[str, str] = {
     "related":        "biolink:related_to",
     "associated with":"biolink:related_to",
     "associates with":"biolink:related_to",
+    # expression
+    "expressed in":              "biolink:expressed_in",
+    "expresses":                 "biolink:expresses",
+    "expression in":             "biolink:expressed_in",
+    "is expressed in":           "biolink:expressed_in",
+    "is expressed":              "biolink:expressed_in",
+    "expressed":                 "biolink:expressed_in",
 
     # clinical-ish
     "treats":                 "biolink:treats",
@@ -160,12 +169,29 @@ def _load_biolink() -> Tuple[Dict[str, Set[str]], Dict[str, str], Dict[str, str]
       pred_range:     predicate_key -> class_key  (object range)
     If BIOLINK_YAML is unset/unreadable, returns empty dicts (callers must tolerate).
     """
-    p = os.getenv("BIOLINK_YAML")
-    if not p:
-        return {}, {}, {}
-    try:
-        data = yaml.safe_load(open(p, "r"))
-    except Exception:
+    candidates = []
+    env_path = os.getenv("BIOLINK_YAML")
+    if env_path:
+        candidates.append(Path(env_path))
+
+    # Bundle fallback: project root / biolink-model.yaml
+    candidates.append(Path(__file__).resolve().parents[2] / "biolink-model.yaml")
+    # Allow a copy living in data/
+    candidates.append(Path(__file__).resolve().parents[2] / "data" / "biolink-model.yaml")
+
+    data: Dict[str, Any] = {}
+    for candidate in candidates:
+        try:
+            if candidate and candidate.exists():
+                with candidate.open("r") as fh:
+                    parsed = yaml.safe_load(fh) or {}
+                if isinstance(parsed, dict):
+                    data = parsed
+                    break
+        except Exception:
+            continue
+
+    if not data:
         return {}, {}, {}
 
     classes_is_a: Dict[str, Set[str]] = {}
@@ -173,8 +199,15 @@ def _load_biolink() -> Tuple[Dict[str, Set[str]], Dict[str, str], Dict[str, str]
     pred_range: Dict[str, str] = {}
 
     # classes
+    def _as_list(value: Any) -> list:
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple, set)):
+            return list(value)
+        return [value]
+
     for k, v in (data.get("classes") or {}).items():
-        parents = set(v.get("is_a") or []) | set(v.get("mixins") or [])
+        parents = set(_as_list(v.get("is_a"))) | set(_as_list(v.get("mixins")))
         # normalize “biolink:Class” keys to just “Class”
         classes_is_a[k] = {p.split(":")[-1] for p in parents}
 
@@ -187,9 +220,32 @@ def _load_biolink() -> Tuple[Dict[str, Set[str]], Dict[str, str], Dict[str, str]
     return classes_is_a, pred_domain, pred_range
 
 @lru_cache(maxsize=None)
-def _isa_memo(child: str) -> Set[str]:
-    """Transitive closure of is_a for a class key (without 'biolink:' prefix)."""
+def _norm_class_key(text: str) -> str:
+    """Normalize class keys to a stable form for is_a checks."""
+    raw = (text or "").split(":", 1)[-1]
+    raw = raw.replace("_", " ")
+    raw = re.sub(r"(?<!^)([A-Z])", r" \1", raw)
+    raw = re.sub(r"\s+", " ", raw).strip().lower()
+    return raw
+
+@lru_cache(maxsize=1)
+def _normalized_class_parents() -> Dict[str, Set[str]]:
     classes_is_a, _, _ = _load_biolink()
+    norm: Dict[str, Set[str]] = {}
+    for k, parents in classes_is_a.items():
+        nk = _norm_class_key(k)
+        if nk not in norm:
+            norm[nk] = set()
+        for p in parents:
+            np = _norm_class_key(p)
+            if np:
+                norm[nk].add(np)
+    return norm
+
+@lru_cache(maxsize=None)
+def _isa_memo(child: str) -> Set[str]:
+    """Transitive closure of is_a for a normalized class key."""
+    classes_is_a = _normalized_class_parents()
     seen: Set[str] = set()
     stack = [child]
     while stack:
@@ -208,8 +264,8 @@ def is_a(child: str, parent: str) -> bool:
     """
     if not child or not parent:
         return False
-    c = child.split(":")[-1]
-    p = parent.split(":")[-1]
+    c = _norm_class_key(child)
+    p = _norm_class_key(parent)
     if c == p:
         return True
     return p in _isa_memo(c)
@@ -232,6 +288,7 @@ def allowed_subject_categories(pred_curie: str) -> Set[str]:
     domain, _ = _domain_range_for_predicate(pred_curie)
     if not domain:
         return set()
+    domain = _norm_class_key(domain)
     # All subclasses of domain are allowed
     return {f"biolink:{c}" for c in _isa_memo(domain)}
 
@@ -240,6 +297,7 @@ def allowed_object_categories(pred_curie: str) -> Set[str]:
     _, range_ = _domain_range_for_predicate(pred_curie)
     if not range_:
         return set()
+    range_ = _norm_class_key(range_)
     return {f"biolink:{c}" for c in _isa_memo(range_)}
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -315,5 +373,139 @@ def canonicalize_class(term: str) -> Optional[str]:
                 return f"biolink:{match}"
     except Exception:
         pass
+
+    return None
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Unpinned category matching (lexicon + Biolink class names)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_UNPINNED_SYNONYMS: Dict[str, str] = {
+    # genes / proteins
+    "gene": "Gene", "genes": "Gene",
+    "protein": "Protein", "proteins": "Protein",
+    "gene product": "Protein", "gene products": "Protein",
+    "protein family": "ProteinFamily", "protein families": "ProteinFamily",
+    # drugs / chemicals
+    "drug": "Drug", "drugs": "Drug", "medication": "Drug", "medications": "Drug",
+    "chemical": "ChemicalEntity", "chemicals": "ChemicalEntity",
+    "compound": "ChemicalEntity", "compounds": "ChemicalEntity",
+    "small molecule": "SmallMolecule", "small molecules": "SmallMolecule",
+    "metabolite": "ChemicalEntity", "metabolites": "ChemicalEntity",
+    # diseases / phenotypes
+    "disease": "Disease", "diseases": "Disease",
+    "disorder": "Disease", "disorders": "Disease",
+    "condition": "Disease", "conditions": "Disease",
+    "syndrome": "Disease", "syndromes": "Disease",
+    "phenotype": "PhenotypicFeature", "phenotypes": "PhenotypicFeature",
+    "phenotypic feature": "PhenotypicFeature", "phenotypic features": "PhenotypicFeature",
+    "symptom": "PhenotypicFeature", "symptoms": "PhenotypicFeature",
+    # pathways / processes / activities
+    "pathway": "Pathway", "pathways": "Pathway",
+    "process": "BiologicalProcess", "processes": "BiologicalProcess",
+    "biological process": "BiologicalProcess", "biological processes": "BiologicalProcess",
+    "molecular activity": "MolecularActivity", "molecular activities": "MolecularActivity",
+    "activity": "MolecularActivity", "activities": "MolecularActivity",
+    # anatomy / cell
+    "tissue": "AnatomicalEntity", "tissues": "AnatomicalEntity",
+    "body": "AnatomicalEntity", "in the body": "AnatomicalEntity",
+    "anatomical location": "AnatomicalEntity", "anatomical locations": "AnatomicalEntity",
+    "organ system": "AnatomicalEntity", "organ systems": "AnatomicalEntity",
+    "organ": "GrossAnatomicalStructure", "organs": "GrossAnatomicalStructure",
+    "anatomy": "AnatomicalEntity", "anatomical entity": "AnatomicalEntity",
+    "cell": "Cell", "cells": "Cell",
+    "cell type": "Cell", "cell types": "Cell",
+    "cell line": "CellLine", "cell lines": "CellLine",
+    "organelle": "CellularComponent", "organelles": "CellularComponent",
+    "cellular compartment": "CellularComponent", "subcellular location": "CellularComponent",
+    # organisms
+    "organism": "OrganismalEntity", "organisms": "OrganismalEntity",
+    "species": "OrganismTaxon", "taxon": "OrganismTaxon", "taxa": "OrganismTaxon",
+    # phenotypic feature
+    "sign": "PhenotypicFeature", "signs": "PhenotypicFeature",
+}
+
+_ONEHOP_UNPINNED_ALLOWLIST: Set[str] = {
+    "biolink:Protein",
+    "biolink:ProteinFamily",
+    "biolink:Gene",
+    "biolink:ChemicalEntity",
+    "biolink:SmallMolecule",
+    "biolink:Drug",
+    "biolink:Disease",
+    "biolink:PhenotypicFeature",
+    "biolink:AnatomicalEntity",
+    "biolink:GrossAnatomicalStructure",
+    "biolink:Cell",
+    "biolink:CellLine",
+    "biolink:CellularComponent",
+    "biolink:Pathway",
+    "biolink:BiologicalProcess",
+    "biolink:MolecularActivity",
+    "biolink:OrganismTaxon",
+    "biolink:OrganismalEntity",
+    "biolink:Virus",
+}
+
+def _camel_to_words(text: str) -> str:
+    return re.sub(r"(?<!^)([A-Z])", r" \1", text).replace("_", " ")
+
+def _normalize_category_text(text: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9 ]+", " ", (text or "").lower())
+    return " ".join(cleaned.replace("_", " ").split())
+
+@lru_cache(maxsize=1)
+def _biolink_category_lexicon() -> Dict[str, str]:
+    lex: Dict[str, str] = {}
+    for phrase, cls in _UNPINNED_SYNONYMS.items():
+        lex[_normalize_category_text(phrase)] = f"biolink:{cls}"
+
+    classes_is_a, _, _ = _load_biolink()
+    for cls in classes_is_a.keys():
+        for variant in (cls, _camel_to_words(cls)):
+            key = _normalize_category_text(variant)
+            if key and key not in lex:
+                lex[key] = f"biolink:{cls}"
+
+    return lex
+
+def match_unpinned_category(
+    text: str,
+    *,
+    allow_fuzzy: bool = True,
+    allowlist: Optional[Set[str]] = None,
+    fuzzy_cutoff: float = 0.92,
+    max_fuzzy_words: int = 3,
+) -> Optional[str]:
+    """
+    Resolve an unpinned mention (e.g., "proteins", "tissues") to a Biolink category.
+    Uses a small synonym lexicon first, then exact class-name matches from Biolink YAML,
+    with optional conservative fuzzy matching as a fallback.
+    """
+    raw = (text or "").strip()
+    if raw.lower().startswith("biolink:"):
+        raw = raw.split(":", 1)[1]
+    norm = _normalize_category_text(raw)
+    if not norm:
+        return None
+
+    lex = _biolink_category_lexicon()
+    allowed = allowlist if allowlist is not None else _ONEHOP_UNPINNED_ALLOWLIST
+    if allowed:
+        lex = {k: v for k, v in lex.items() if v in allowed}
+    if norm in lex:
+        return lex[norm]
+
+    if norm.endswith("s"):
+        singular = norm[:-1]
+        if singular in lex:
+            return lex[singular]
+
+    if allow_fuzzy and len(norm) >= 5 and lex:
+        if len(norm.split()) > max_fuzzy_words:
+            return None
+        matches = difflib.get_close_matches(norm, lex.keys(), n=1, cutoff=fuzzy_cutoff)
+        if matches:
+            return lex[matches[0]]
 
     return None

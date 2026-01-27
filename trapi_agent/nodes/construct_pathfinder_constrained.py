@@ -20,10 +20,10 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..state_types import TRAPIState
-from ..utils.biolink_utils import canonicalize_class
+from ..utils.biolink_utils import canonicalize_class, match_unpinned_category
 
 logger = logging.getLogger(__name__)
 REQ_PRED = "biolink:related_to"
@@ -64,18 +64,59 @@ _HINT_ORDER: List[Tuple[str, str]] = [
     # drug / chemical
     (r"\bcontain(?:s|ing)?\s+(?:a\s+)?drug\b",                "Drug"),
     (r"\b(?:via|through)\s+(?:a\s+)?drug\b",                  "Drug"),
+    (r"\b(?:via|through)\s+(?:the\s+)?small\s+molecules?\b",  "SmallMolecule"),
     (r"\b(?:via|through)\s+(?:a\s+)?chemicals?\b",            "ChemicalEntity"),
     (r"\b(?:via|through)\s+(?:a\s+)?compounds?\b",            "ChemicalEntity"),
     # pathway / phenotype / anatomy
     (r"\b(?:via|through)\s+(?:the\s+)?pathways?\b",           "Pathway"),
+    (r"\b(?:via|through)\s+(?:the\s+)?biological\s+process(?:es)?\b", "BiologicalProcess"),
+    (r"\b(?:via|through)\s+(?:the\s+)?process(?:es)?\b",      "BiologicalProcess"),
+    (r"\b(?:via|through)\s+(?:the\s+)?molecular\s+activit(?:y|ies)\b", "MolecularActivity"),
+    (r"\b(?:via|through)\s+(?:the\s+)?activit(?:y|ies)\b",    "MolecularActivity"),
     (r"\b(?:via|through)\s+(?:the\s+)?phenotypes?\b",         "PhenotypicFeature"),
     (r"\b(?:via|through)\s+(?:the\s+)?tissues?\b",            "AnatomicalEntity"),
     (r"\b(?:via|through)\s+anatom(?:y|ical(?:\s+entity)?)\b", "AnatomicalEntity"),
+    (r"\b(?:via|through)\s+(?:the\s+)?cells?\b",              "Cell"),
+    (r"\b(?:via|through)\s+(?:the\s+)?cell\s+types?\b",       "Cell"),
+    (r"\b(?:via|through)\s+(?:the\s+)?organelles?\b",         "CellularComponent"),
+    (r"\b(?:via|through)\s+(?:the\s+)?cellular\s+components?\b", "CellularComponent"),
 ]
 
 
 def _query_hint_category(query: str) -> Optional[str]:
     q = (query or "").lower()
+    # First: try to extract an explicit "via/through/including" phrase and map it
+    # through the same unpinned-category resolver used in one-hop.
+    m = re.search(
+        r"\b(?:via|through|including|that includes|that include|contain(?:s|ing)?)\s+(.+)$",
+        q,
+        flags=re.I,
+    )
+    if m:
+        phrase = m.group(1)
+        # If the phrase contains "paths going through X", keep only the tail.
+        m2 = re.search(r"\bpaths?\s+(?:going\s+)?through\s+(.+)$", phrase, flags=re.I)
+        if m2:
+            phrase = m2.group(1)
+        # Trim at common query glue words/punctuation.
+        phrase = re.split(r"[?.!,;:]", phrase)[0]
+        phrase = re.split(r"\b(?:between|and|related|connected|connections?)\b", phrase)[0]
+        phrase = phrase.strip()
+        if phrase:
+            # Try full phrase, then last 2-3 words.
+            candidates = [phrase]
+            parts = phrase.split()
+            if len(parts) > 2:
+                candidates.append(" ".join(parts[-2:]))
+            if len(parts) > 3:
+                candidates.append(" ".join(parts[-3:]))
+            for cand in candidates:
+                cat = match_unpinned_category(cand, allow_fuzzy=True)
+                if cat:
+                    canon = canonicalize_class(cat)
+                    if canon:
+                        return canon
+
     for pat, raw in _HINT_ORDER:
         if re.search(pat, q, flags=re.I):
             cat = canonicalize_class(raw)

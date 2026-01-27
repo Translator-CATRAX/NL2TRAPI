@@ -75,12 +75,14 @@ class Settings(BaseSettings):
         return Path(self.chroma_persist_dir) if self.chroma_persist_dir else self.base_data_dir / "chroma_indexes"
 
     # ── Model identifiers ─────────────────────────────────────────────────────
-    LLM_NAME: str = "BioMistral/BioMistral-7B"
+    # Default to an instruction-tuned model suited for structured extraction.
+    # Previous settings: "BioMistral/BioMistral-7B", "google/flan-t5-base"
+    LLM_NAME: str = "microsoft/Phi-3.5-mini-instruct"
     EMB_MODEL: str = "pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb"
 
     # ── Runtime knobs (read by utils.llm, etc.) ───────────────────────────────
     PREFER_GPU: bool = True
-    USE_BITSANDBYTES: bool = True
+    USE_BITSANDBYTES: bool = False
     QUANTIZATION: str = "8bit"  # "8bit" or "4bit" (used only when USE_BITSANDBYTES=True)
 
     # ── Validation / versions ─────────────────────────────────────────────────

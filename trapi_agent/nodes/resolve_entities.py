@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, Optional, Set, Tuple, List
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..state_types import TRAPIState
 from ..utils.node_norm import lookup as nn_lookup
@@ -53,6 +53,12 @@ GENERIC_CATEGORY_HINTS = {
     "tissues":  "biolink:AnatomicalEntity",
     "cell":     "biolink:Cell",
     "cells":    "biolink:Cell",
+    "organ":    "biolink:AnatomicalEntity",
+    "organs":   "biolink:AnatomicalEntity",
+    "anatomy":  "biolink:AnatomicalEntity",
+    "anatomical":"biolink:AnatomicalEntity",
+    "location":"biolink:AnatomicalEntity",
+    "locations":"biolink:AnatomicalEntity",
     "process":  "biolink:BiologicalProcess",
     "processes":"biolink:BiologicalProcess",
     "gene":     "biolink:Gene",
@@ -65,6 +71,16 @@ GENERIC_CATEGORY_HINTS = {
     "pathways": "biolink:Pathway",
     "phenotype":"biolink:PhenotypicFeature",
     "phenotypes":"biolink:PhenotypicFeature",
+}
+
+# Generic tokens that should never be pinned as entities.
+_SKIP_ENTITY_TOKENS = {
+    "cellular",
+    "influence", "influenced", "influences", "influencing",
+    "involve", "involved", "involves", "involving",
+    "associate", "associated", "associates", "associating",
+    "relate", "related", "relates", "relating",
+    "link", "linked", "links", "linking",
 }
 
 # --- Category resolution (prefer your shared utility) --------------------------------
@@ -94,6 +110,8 @@ except Exception:
 
 # --- Lazy local resolver (optional) ---------------------------------------------------
 _RESOLVER: Optional[NodeResolver] = None
+
+
 def _resolver() -> Optional[NodeResolver]:
     global _RESOLVER
     if _RESOLVER is None:
@@ -186,10 +204,13 @@ def _pin_disease_from_ngrams(q: str, max_n: int = 5) -> Optional[Tuple[str, str]
     n = min(max_n, len(toks))
     skip = {"what", "which", "drug", "drugs", "chemical", "chemicals",
             "treat", "treats", "treating", "are", "for", "help", "helpful"}
+    skip |= set(GENERIC_CATEGORY_HINTS.keys())
+    skip |= _SKIP_ENTITY_TOKENS
     for k in range(n, 0, -1):  # longer first
         for i in range(0, len(toks) - k + 1):
             phrase = " ".join(toks[i:i+k]).strip(" -’'")
-            if phrase.lower() in skip:
+            phrase_l = phrase.lower()
+            if phrase_l in skip or any(t in skip for t in phrase_l.split()):
                 continue
             got = _try_pin_disease(phrase)
             if got:
@@ -230,17 +251,37 @@ def _pin_any_from_ngrams(q: str, max_n: int = 6) -> Optional[Tuple[str, str, str
         "and","or","vs","by","via","through","contain","contains","containing","paths",
         "path","between","associated","related","genes","gene","proteins","protein",
         "drug","drugs","chemical","chemicals","treat","treats","treating","activity",
-        "upregulated","downregulated"
+        "upregulated","downregulated",
+        "interact","interacts","interacting",
+        "bind","binds","binding",
+        "express","expressed","expressing","expression",
+        "locate","located","localize","localized",
+        "associate","associates","associating",
+        "relate","relates","relating","related",
     }
+    skip |= set(GENERIC_CATEGORY_HINTS.keys())
+    skip |= _SKIP_ENTITY_TOKENS
     for k in range(n, 0, -1):  # longer first
         for i in range(0, len(toks) - k + 1):
             phrase = " ".join(toks[i:i+k]).strip(" -’'")
-            if phrase.lower() in skip:
+            phrase_l = phrase.lower()
+            if phrase_l in skip or any(t in skip for t in phrase_l.split()):
                 continue
             got = _try_pin_any(phrase)
             if got:
                 return got
     return None
+
+def pin_any_from_query(query: str) -> Optional[Dict[str, Any]]:
+    """
+    Public helper: pin any resolvable entity from a query string.
+    Returns a node dict compatible with state["nodes"] or None.
+    """
+    got = _pin_any_from_ngrams(query or "")
+    if not got:
+        return None
+    curie, label, cat = got
+    return {"id": curie, "name": label, "category": [cat], "pinned": True}
 
 # --- LangGraph node -------------------------------------------------------------------
 def node(state: TRAPIState) -> TRAPIState:  # noqa: C901
@@ -260,6 +301,8 @@ def node(state: TRAPIState) -> TRAPIState:  # noqa: C901
     # 1) Normal resolution for any extracted entities
     for text in state.get("entities", []):
         tok = (text or "").strip().lower()
+        if tok in _SKIP_ENTITY_TOKENS:
+            continue
         hint_cat = GENERIC_CATEGORY_HINTS.get(tok)
         if hint_cat:
             # Treat this word as a schema hint, not a named entity
@@ -314,9 +357,40 @@ def node(state: TRAPIState) -> TRAPIState:  # noqa: C901
         else:
             logger.warning("Treats fallback could not pin disease from query: %r", q)
 
+    # 2b) Pathfinder-only: try to pin a second entity if only one is pinned
+    if state.get("route") in {"pathfinder", "pathfinder_constrained"}:
+        pinned_count = _count_pinned(nodes)
+        if pinned_count < 2:
+            q = state.get("query", "") or ""
+            pinned_names = [
+                (meta.get("name") or "").strip()
+                for meta in nodes.values()
+                if meta.get("id") and (meta.get("name") or "").strip()
+            ]
+            q_reduced = q
+            for name in pinned_names:
+                q_reduced = re.sub(rf"\\b{re.escape(name)}\\b", " ", q_reduced, flags=re.I)
+            q_reduced = re.sub(r"\\s+", " ", q_reduced).strip()
+
+            got = _pin_any_from_ngrams(q_reduced or q)
+            if got:
+                curie, label, cat = got
+                if curie not in used:
+                    nid = f"n{len(nodes)}"
+                    nodes[nid] = {
+                        "id": curie,
+                        "name": label,
+                        "category": [cat],
+                        "pinned": True,
+                    }
+                    used.add(curie)
+                    if label:
+                        curie_labels[curie] = label
+                    logger.info("Pathfinder fallback pinned second entity: %s → %s (category=%s)", label, curie, cat)
+
     # 3) Generic safety-net: if NOTHING is pinned yet, pin *something* from the query
     if _count_pinned(nodes) == 0:
-        q = state.get("query", "") or ""
+        q = state.get("query_minus_unpinned") or state.get("query") or ""
         got = _pin_any_from_ngrams(q)
         if got:
             curie, label, cat = got

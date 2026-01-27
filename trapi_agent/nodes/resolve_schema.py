@@ -18,8 +18,21 @@ Skips work when state['skip_schema'] is True (e.g., Pathfinder, Treats).
 from __future__ import annotations
 
 import logging
+import os
 import re
+from functools import lru_cache
+from pathlib import Path
 from typing import Optional, List, Dict, Any, Set
+
+try:
+    import yaml  # type: ignore
+except Exception:  # pragma: no cover - fallback if PyYAML missing
+    yaml = None  # type: ignore
+
+try:
+    from rapidfuzz import fuzz, process  # type: ignore
+except Exception:  # pragma: no cover - fallback if rapidfuzz missing
+    fuzz = process = None  # type: ignore
 
 from ..state_types import TRAPIState
 from ..config import settings
@@ -34,8 +47,115 @@ from ..utils.biolink_utils import (
 
 logger = logging.getLogger(__name__)
 
-# Chroma collection with Biolink classes & predicates
-schema_col = get_collection(settings.YAML_SCHEMA_COLLECTION)
+@lru_cache(maxsize=1)
+def _schema_col():
+    """Lazy-load the schema collection to avoid embedding downloads when unused."""
+    return get_collection(settings.YAML_SCHEMA_COLLECTION)
+
+# ── predicate fuzzy lexicon helpers ─────────────────────────────────────────
+
+def _candidate_yaml_paths() -> list[Path]:
+    paths: list[Path] = []
+    env_path = os.getenv("BIOLINK_YAML")
+    if env_path:
+        paths.append(Path(env_path))
+    repo_root = Path(__file__).resolve().parents[2]
+    paths.append(repo_root / "biolink-model.yaml")
+    paths.append(repo_root / "data" / "biolink-model.yaml")
+    return paths
+
+
+@lru_cache(maxsize=1)
+def _predicate_slots() -> dict[str, dict]:
+    if yaml is None:
+        return {}
+    for candidate in _candidate_yaml_paths():
+        try:
+            if candidate.exists():
+                with candidate.open("r") as fh:
+                    data = yaml.safe_load(fh) or {}
+                slots = data.get("slots") or {}
+                if isinstance(slots, dict) and slots:
+                    return slots
+        except Exception:
+            continue
+    return {}
+
+
+def _normalize_phrase(text: str) -> str:
+    return " ".join(str(text or "").strip().lower().replace("_", " ").split())
+
+
+@lru_cache(maxsize=1)
+def _predicate_lexicon() -> tuple[list[str], dict[str, str]]:
+    slots = _predicate_slots()
+    choices: list[str] = []
+    mapping: dict[str, str] = {}
+
+    for key, spec in slots.items():
+        canonical = f"biolink:{key}"
+        phrases = {key, key.replace("_", " "), str(spec.get("name") or "").replace("_", " ")}
+        for field in (
+            "aliases",
+            "exact_synonyms",
+            "narrow_synonyms",
+            "broad_synonyms",
+            "related_synonyms",
+        ):
+            values = spec.get(field)
+            if isinstance(values, (list, tuple, set)):
+                phrases.update(values)
+
+        for phrase in phrases:
+            norm = _normalize_phrase(phrase)
+            if not norm or norm in mapping:
+                continue
+            choices.append(norm)
+            mapping[norm] = canonical
+
+    return choices, mapping
+
+
+def _canonical_predicate(value: str | None) -> Optional[str]:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    text = text.split("biolink:")[-1]
+    text = text.replace(" ", "_")
+    text = re.sub(r"_+", "_", text).strip("_")
+    if not text:
+        return None
+    return f"biolink:{text}"
+
+
+def _fuzzy_match_predicate(text: str, *, min_score: int = 92) -> Optional[str]:
+    if not text or process is None:
+        return None
+
+    if str(text).strip().lower().startswith("biolink:"):
+        return _canonical_predicate(text)
+
+    choices, mapping = _predicate_lexicon()
+    if not choices:
+        return None
+
+    query = _normalize_phrase(text)
+    if not query:
+        return None
+
+    match = process.extractOne(
+        query,
+        choices,
+        scorer=fuzz.WRatio if fuzz else None,
+        score_cutoff=min_score,
+    )
+    if not match:
+        return None
+    return mapping.get(match[0])
+
+# existing helpers follow
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -54,7 +174,7 @@ def _best_hit(term: str, kind: str) -> Optional[str]:
     if not term:
         return None
     try:
-        res = schema_col.query(query_texts=[_normalize(term)], n_results=30)
+        res = _schema_col().query(query_texts=[_normalize(term)], n_results=30)
     except Exception as e:
         logger.debug("Schema query failed: %s", e)
         return None
@@ -80,7 +200,7 @@ def _best_hit(term: str, kind: str) -> Optional[str]:
 def _top_predicates(query: str, k: int = 10) -> List[str]:
     """Return up to k predicate keys most semantically similar to query."""
     try:
-        res = schema_col.query(query_texts=[_normalize(query)], n_results=3 * k)
+        res = _schema_col().query(query_texts=[_normalize(query)], n_results=3 * k)
     except Exception as e:
         logger.debug("Predicate lookup failed: %s", e)
         return []
@@ -186,6 +306,25 @@ def _pick_cat(generic_types: list[str], allowed: set[str], pinned_cats: set[str]
 
     return "biolink:NamedThing"
 
+
+def _domain_range_ok(pred_curie: str, node_cats: Set[str], generic_types: List[str]) -> bool:
+    allowed_sub = allowed_subject_categories(pred_curie)
+    allowed_obj = allowed_object_categories(pred_curie)
+
+    pool: Set[str] = {c for c in node_cats if c}
+    pool.update(c for c in generic_types if c)
+
+    def _matches(allowed: set[str]) -> bool:
+        if not allowed:
+            return True
+        allowed_l = {a.lower() for a in allowed}
+        for cat in pool:
+            if cat.lower() in allowed_l or any(is_a(cat, a) for a in allowed):
+                return True
+        return False
+
+    return _matches(allowed_sub) and _matches(allowed_obj)
+
 # ── node ──────────────────────────────────────────────────────────────────────
 
 def node(state: TRAPIState) -> TRAPIState:
@@ -246,14 +385,50 @@ def node(state: TRAPIState) -> TRAPIState:
 
     # 3) resolve predicate to canonical CURIE
     raw_pred = state.get("predicate", "")
-    norm = normalize_pred(raw_pred)                    # e.g., "interacts with" → biolink:physically_interacts_with/related_to
-    key = _best_hit(norm, "predicate") or norm
-    key = key.replace(" ", "_").lstrip(":")
-    if key.lower() in {"relation", "related", "related_to"}:
-        key = "related_to"
-    curie_pred = f"biolink:{key.split('biolink:')[-1]}"
+    available_cats: Set[str] = set()
+    for meta in nodes.values():
+        available_cats.update(meta.get("category") or [])
+
+    generic_types_list: List[str] = state.get("generic_types", []) or []
+
+    curie_pred: Optional[str] = None
+    resolution_source = "rag"
+
+    fuzzy_curie = _fuzzy_match_predicate(raw_pred)
+    if fuzzy_curie and _domain_range_ok(fuzzy_curie, available_cats, generic_types_list):
+        curie_pred = fuzzy_curie
+        resolution_source = "fuzzy"
+
+    if curie_pred is None:
+        candidates_curie: List[str] = []
+        norm = normalize_pred(raw_pred)
+        primary = _canonical_predicate(_best_hit(norm, "predicate") or norm)
+        if primary:
+            candidates_curie.append(primary)
+
+        norm_curie = _canonical_predicate(norm)
+        if norm_curie and norm_curie not in candidates_curie:
+            candidates_curie.append(norm_curie)
+
+        for raw in state.get("candidate_preds") or []:
+            cand = _canonical_predicate(raw)
+            if cand and cand not in candidates_curie:
+                candidates_curie.append(cand)
+
+        specific = [c for c in candidates_curie if c.split(":", 1)[-1].lower() != "related_to"]
+        generic = [c for c in candidates_curie if c.split(":", 1)[-1].lower() == "related_to"]
+        ordered = specific + generic
+
+        for cand in ordered:
+            if _domain_range_ok(cand, available_cats, generic_types_list):
+                curie_pred = cand
+                break
+        else:
+            curie_pred = "biolink:related_to"
+
+    curie_pred = _canonical_predicate(curie_pred) or curie_pred
     state["predicate"] = curie_pred
-    logger.info("Resolved predicate '%s' → %s", raw_pred, curie_pred)
+    logger.info("Resolved predicate '%s' [%s] → %s", raw_pred, resolution_source, curie_pred)
 
     # 4) Predicate-aware typing for any remaining UNPINNED placeholders
     try:
