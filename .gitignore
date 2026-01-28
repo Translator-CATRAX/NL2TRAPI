@@ -16,7 +16,8 @@ dist/
 
 # Python dotenv
 .env
-.env.* 
+.env.*
+!.env.example
 
 # ─── Chroma / data ──────────────────────────────────────────────────
 data/chroma_indexes/
@@ -47,5 +48,12 @@ biolink-model.yaml
 *.db
 biolink-model.yaml
 nodes.json
+# local caches / large assets
+.hf/
+models/
+data/all_biolink_mapped_vectors.json
+data/curie2cat.pkl
+data/exactindex.pkl
+data/exact_index.pkl
 # generated diagrams
 *.png

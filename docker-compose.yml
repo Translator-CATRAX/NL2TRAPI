@@ -1,0 +1,26 @@
+services:
+  ui:
+    build:
+      context: .
+    env_file:
+      - ./.env
+    command: >
+      bash -lc "PYTHONPATH=/app streamlit run scripts/demo_streamlit.py
+      --server.port=8501 --server.address=0.0.0.0 --server.headless=true"
+    volumes:
+      - /data/nl2trapi:/data
+    restart: unless-stopped
+    expose:
+      - "8501"
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /data/nl2trapi/caddy:/data
+    restart: unless-stopped
+    depends_on:
+      - ui

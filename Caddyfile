@@ -1,0 +1,9 @@
+# Replace with your DNS name once IT provides it.
+# Example:
+#   nl2trapi.example.edu {
+#     reverse_proxy ui:8501
+#   }
+
+:80 {
+  reverse_proxy ui:8501
+}
